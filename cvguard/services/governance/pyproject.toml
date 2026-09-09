@@ -1,0 +1,20 @@
+[build-system]
+requires = ["hatchling>=1.21.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cvguard-governance"
+version = "0.2.0"
+description = "CVGuard Governance Spine Service"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.110.0,<1.0.0",
+    "uvicorn[standard]>=0.28.0,<1.0.0",
+    "pydantic>=2.7.0,<3.0.0",
+    "cvguard-schemas>=0.2.0",
+    "cryptography>=42.0.0",
+    "psycopg[binary]>=3.1.18",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]

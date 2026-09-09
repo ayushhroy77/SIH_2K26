@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "battery_name": "CVGuard Canonical Vision Model Reference Battery",
+  "version": "1.0.0",
+  "created_at": "2026-09-09T00:00:00Z",
+  "description": "Fixed, versioned set of canonical test vision inputs and documented output envelopes for verifying behavioral integrity.",
+  "target_domain": "general_vision_classification",
+  "items": [
+    {
+      "item_id": "canon_001_natural_contrast",
+      "description": "High-contrast natural landscape reference probe",
+      "expected_top_class": 0,
+      "min_confidence": 0.40,
+      "max_entropy": 2.80,
+      "min_entropy": 0.35,
+      "input_dimension": [1, 3, 224, 224]
+    },
+    {
+      "item_id": "canon_002_geometric_primitives",
+      "description": "Synthetic multi-polygon geometric pattern probe",
+      "expected_top_class": 1,
+      "min_confidence": 0.35,
+      "max_entropy": 3.00,
+      "min_entropy": 0.35,
+      "input_dimension": [1, 3, 224, 224]
+    },
+    {
+      "item_id": "canon_003_smooth_gradient",
+      "description": "Bilinear color gradient reference probe with uniform spatial frequency",
+      "expected_top_class": 2,
+      "min_confidence": 0.30,
+      "max_entropy": 3.20,
+      "min_entropy": 0.40,
+      "input_dimension": [1, 3, 224, 224]
+    },
+    {
+      "item_id": "canon_004_textured_surface",
+      "description": "High-frequency textile weave texture probe",
+      "expected_top_class": 3,
+      "min_confidence": 0.35,
+      "max_entropy": 2.90,
+      "min_entropy": 0.35,
+      "input_dimension": [1, 3, 224, 224]
+    },
+    {
+      "item_id": "canon_005_ambiguous_noise",
+      "description": "Calibrated Gaussian noise sanity probe (must produce high entropy)",
+      "expected_top_class": null,
+      "min_confidence": 0.05,
+      "max_entropy": 3.32,
+      "min_entropy": 1.20,
+      "input_dimension": [1, 3, 224, 224]
+    }
+  ]
+}

@@ -1,0 +1,265 @@
+# ==============================================================================
+# CVGuard Monorepo Local Orchestration Compose
+# Phase 0: Six Stateless FastAPI Planes + Offline Datastores (Postgres 16, Redis 7, MinIO)
+# ==============================================================================
+
+version: "3.8"
+
+networks:
+  cvguard-net:
+    driver: bridge
+
+volumes:
+  postgres_data:
+    name: cvguard_postgres_data
+  minio_data:
+    name: cvguard_minio_data
+
+services:
+  # ----------------------------------------------------------------------------
+  # Foundation Datastores
+  # ----------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: cvguard-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init-ledger.sql:/docker-entrypoint-initdb.d/01-init-ledger.sql:ro
+      - ./postgres/init-dataplane.sql:/docker-entrypoint-initdb.d/02-init-dataplane.sql:ro
+      - ./postgres/init-inferenceplane.sql:/docker-entrypoint-initdb.d/03-init-inferenceplane.sql:ro
+    networks:
+      - cvguard-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: cvguard-redis
+    restart: unless-stopped
+    command: >
+      sh -c 'if [ -n "$$REDIS_PASSWORD" ]; then
+        redis-server --requirepass "$$REDIS_PASSWORD";
+      else
+        redis-server;
+      fi'
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    networks:
+      - cvguard-net
+    healthcheck:
+      test: >
+        sh -c 'if [ -n "$$REDIS_PASSWORD" ]; then
+          redis-cli -a "$$REDIS_PASSWORD" ping;
+        else
+          redis-cli ping;
+        fi'
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  minio:
+    image: minio/minio:RELEASE.2024-03-05T04-48-44Z
+    container_name: cvguard-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    ports:
+      - "${MINIO_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio_data:/data
+    networks:
+      - cvguard-net
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  # ----------------------------------------------------------------------------
+  # CVGuard Stateless FastAPI Services
+  # ----------------------------------------------------------------------------
+  gateway:
+    build:
+      context: ..
+      dockerfile: services/gateway/Dockerfile
+    container_name: cvguard-gateway
+    restart: unless-stopped
+    environment:
+      CVGUARD_ENV: ${CVGUARD_ENV:-development}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      INTERNAL_GOVERNANCE_URL: ${INTERNAL_GOVERNANCE_URL:-http://governance:8005}
+      INTERNAL_DATA_PLANE_URL: ${INTERNAL_DATA_PLANE_URL:-http://data-plane:8001}
+    ports:
+      - "${GATEWAY_PORT:-8000}:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+      governance:
+        condition: service_started
+      data-plane:
+        condition: service_started
+    networks:
+      - cvguard-net
+
+  data-plane:
+    build:
+      context: ..
+      dockerfile: services/data-plane/Dockerfile
+    container_name: cvguard-data-plane
+    restart: unless-stopped
+    environment:
+      CVGUARD_ENV: ${CVGUARD_ENV:-development}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      INTERNAL_GOVERNANCE_URL: ${INTERNAL_GOVERNANCE_URL:-http://governance:8005}
+      HAMMING_DISTANCE_THRESHOLD: ${HAMMING_DISTANCE_THRESHOLD:-10}
+    ports:
+      - "${DATA_PLANE_PORT:-8001}:8001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      governance:
+        condition: service_started
+    networks:
+      - cvguard-net
+
+  model-plane:
+    build:
+      context: ..
+      dockerfile: services/model-plane/Dockerfile
+    container_name: cvguard-model-plane
+    restart: unless-stopped
+    # SECURITY NOTE: In production environments with gVisor installed on the host daemon,
+    # enable runtime: runsc to enforce full kernel-boundary application sandbox isolation.
+    # runtime: runsc
+    environment:
+      CVGUARD_ENV: ${CVGUARD_ENV:-development}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      INTERNAL_GOVERNANCE_URL: ${INTERNAL_GOVERNANCE_URL:-http://governance:8005}
+    ports:
+      - "${MODEL_PLANE_PORT:-8002}:8002"
+    depends_on:
+      minio:
+        condition: service_healthy
+      governance:
+        condition: service_started
+    networks:
+      - cvguard-net
+
+  inference-plane:
+    build:
+      context: ..
+      dockerfile: services/inference-plane/Dockerfile
+    container_name: cvguard-inference-plane
+    restart: unless-stopped
+    environment:
+      CVGUARD_ENV: ${CVGUARD_ENV:-development}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      INTERNAL_GOVERNANCE_URL: http://governance:8005
+      BATCH_MAX_SIZE: 100
+      BATCH_FLUSH_INTERVAL_SECONDS: 5.0
+    ports:
+      - "${INFERENCE_PLANE_PORT:-8003}:8003"
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      governance:
+        condition: service_started
+    networks:
+      - cvguard-net
+
+  drift-plane:
+    build:
+      context: ..
+      dockerfile: services/drift-plane/Dockerfile
+    container_name: cvguard-drift-plane
+    restart: unless-stopped
+    environment:
+      CVGUARD_ENV: ${CVGUARD_ENV:-development}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "${DRIFT_PLANE_PORT:-8004}:8004"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - cvguard-net
+
+  governance:
+    build:
+      context: ..
+      dockerfile: services/governance/Dockerfile
+    container_name: cvguard-governance
+    restart: unless-stopped
+    environment:
+      CVGUARD_ENV: ${CVGUARD_ENV:-development}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB}
+      # Dedicated restricted database role for append-only audit ledger operations
+      POSTGRES_USER: ${POSTGRES_LEDGER_USER:-cvguard_ledger}
+      POSTGRES_PASSWORD: ${POSTGRES_LEDGER_PASSWORD:-cvguard_ledger_secret_change_me_in_prod}
+      # Admin credentials fallback for maintenance/migration if needed
+      POSTGRES_ADMIN_USER: ${POSTGRES_USER}
+      POSTGRES_ADMIN_PASSWORD: ${POSTGRES_PASSWORD}
+      CVGUARD_SIGNING_KEY_PATH: /app/secrets/governance_ed25519.pem
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      - ../services/governance/secrets:/app/secrets
+    ports:
+      - "${GOVERNANCE_PORT:-8005}:8005"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    networks:
+      - cvguard-net

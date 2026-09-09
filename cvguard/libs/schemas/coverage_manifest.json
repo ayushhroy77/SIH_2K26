@@ -1,0 +1,340 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "platform": "CVGuard",
+  "component": "Data Plane, Model Plane, and Inference Plane",
+  "version": "0.5.0",
+  "last_updated": "2026-09-09",
+  "summary": "Threat model and attack class coverage manifest for the CVGuard Data Plane, Model Plane, and Inference Plane integrity assurance suite.",
+  "detectors": [
+    {
+      "id": "cvguard.detector.phash_near_duplicate:v1.0",
+      "name": "Near-Duplicate Perceptual Hash Detector",
+      "mechanism": "64-bit Discrete Cosine Transform (DCT) Perceptual Hashing (pHash) with pairwise Hamming distance evaluation",
+      "covered_attack_classes": [
+        {
+          "name": "Exact and Near-Duplicate Image Injection",
+          "description": "Repeated submission of identical or near-identical images with minor compression, resizing, format conversion, or pixel shifts.",
+          "mitigation": "Flags pairs with Hamming distance <= 10; assigns high confidence to distance <= 2."
+        },
+        {
+          "name": "Dataset Flooding / Redundant Sample Bias",
+          "description": "Adversary or automated scraper injecting repetitive duplicate data to skew training class distribution.",
+          "mitigation": "Sample-level QUARANTINE disposition for distance <= 1; feeds sample signals into SourceAggregator."
+        }
+      ],
+      "uncovered_attack_classes": [
+        {
+          "name": "Large Spatial Transformations and Non-Affine Crops",
+          "reason": "64-bit DCT perceptual hash is sensitive to large rotations (>15-30 degrees) and heavy random cropping."
+        },
+        {
+          "name": "Semantic-Only Duplicates with Distinct Visual Surface Rendering",
+          "reason": "Does not model high-level semantic equivalence if visual rendering geometry or background varies significantly."
+        }
+      ]
+    },
+    {
+      "id": "cvguard.dataplane.ood_mahalanobis:v1.0",
+      "name": "Out-of-Distribution Mahalanobis Detector",
+      "mechanism": "Dense visual feature embeddings via self-hosted ONNX vision backbone and regularized empirical covariance precision matrices",
+      "covered_attack_classes": [
+        {
+          "name": "Covariate Shift and Out-of-Domain Contamination",
+          "description": "Inclusion of foreign, out-of-domain, or non-target category images into a labeled training partition.",
+          "mitigation": "Measures Mahalanobis distance against registered class centroid and precision matrix; confidence scales with distance beyond boundary."
+        },
+        {
+          "name": "Coarse Out-of-Distribution Poisoning",
+          "description": "Adversary attempting to inject irrelevant imagery under legitimate class headings.",
+          "mitigation": "Flags samples with distance > calibrated threshold (default 12.0) with REVIEW disposition."
+        }
+      ],
+      "uncovered_attack_classes": [
+        {
+          "name": "Adversarial Embedding Invariance (Manifold-Constrained Perturbations)",
+          "reason": "Adversarial perturbations mathematically constrained to remain within the class reference covariance ellipsoid will evade Mahalanobis detection."
+        },
+        {
+          "name": "Multimodal Semantic Sub-Distributions",
+          "reason": "Unimodal Gaussian assumption may yield elevated false positive rates on classes with wide diversity (e.g. vehicle types) without Gaussian Mixture Modeling."
+        }
+      ]
+    },
+    {
+      "id": "cvguard.dataplane.label_flip_knn:v1.0",
+      "name": "Label-Flip and Systematic Mislabelling Detector",
+      "mechanism": "k-Nearest-Neighbor (kNN) consensus analysis in normalized feature representation space",
+      "covered_attack_classes": [
+        {
+          "name": "Sparse and Systematic Label Flipping",
+          "description": "Adversary maliciously re-annotating images with incorrect target labels to degrade classification boundaries or poison model accuracy.",
+          "mitigation": "Evaluates consensus among k (default 10) nearest semantic neighbors; flags discordance >= 70%."
+        },
+        {
+          "name": "Human Annotator Fatigue / Systematic Label Drift",
+          "description": "Unintentional annotation errors where annotators consistently misclassify visually distinct classes.",
+          "mitigation": "Emits confidence proportional to neighborhood discordance with evidence detailing the dominant consensus class."
+        }
+      ],
+      "uncovered_attack_classes": [
+        {
+          "name": "Symmetric 100% Class Swapping (Coordinated Global Inversion)",
+          "reason": "If an entire class is 100% swapped with another, the nearest neighbors will also possess the swapped label, evading majority consensus checks."
+        },
+        {
+          "name": "Fine-Grained Borderline Visual Ambiguity",
+          "reason": "Legitimate borderline samples near true decision boundaries (e.g. Siberian Husky vs Alaskan Malamute) may exhibit neighborhood discordance."
+        }
+      ]
+    },
+    {
+      "id": "cvguard.dataplane.trigger_fft_spectral:v1.0",
+      "name": "Frequency-Domain FFT Spectral Trigger Detector",
+      "mechanism": "2D Fast Fourier Transform high-frequency power spectrum outlier analysis and inverse-FFT spatial saliency localization",
+      "covered_attack_classes": [
+        {
+          "name": "High-Frequency Backdoor Injection (Checkerboards / Grids)",
+          "description": "Backdoor triggers composed of sharp high-frequency spatial artifacts (e.g. BadNets checkerboard patterns, static noise patches, crosshairs).",
+          "mitigation": "Identifies statistical outliers (z-score >= 2.5) in high-frequency energy ratio; localizes trigger bounding box as evidence."
+        },
+        {
+          "name": "Periodic Watermark / Steganographic Trigger Artifacts",
+          "description": "Injected synthetic spectral spikes used to watermark or poison vision models.",
+          "mitigation": "Emits cautious confidence (capped at 0.70) with strict REVIEW disposition."
+        }
+      ],
+      "uncovered_attack_classes": [
+        {
+          "name": "Clean-Label Natural Trigger Blends (Low-Frequency Watermarks)",
+          "reason": "Triggers blended smoothly into natural imagery using low-frequency spectral filters or subtle global illumination shifts do not generate high-frequency spikes."
+        },
+        {
+          "name": "Semantic Physical Object Backdoors",
+          "reason": "Natural physical objects acting as triggers (e.g. sunglasses, yellow sticky notes, coffee cups) have standard natural scene power spectra."
+        },
+        {
+          "name": "Feature Collision / Imperceptible Warping Backdoors",
+          "reason": "WaNet-style elastic image deformations or Wan/Sheng-style gradient-optimized clean-label poisons evade frequency magnitude thresholding."
+        }
+      ]
+    },
+    {
+      "id": "cvguard.dataplane.source_aggregator:v1.0",
+      "name": "Unified Cross-Detector Source Aggregator",
+      "mechanism": "Weighted multi-signal contributor anomaly scoring and population z-score normalization",
+      "covered_attack_classes": [
+        {
+          "name": "Multi-Vector Coordinated Contributor Poisoning",
+          "description": "Adversary contributing multiple weak or diverse anomalies (e.g. one OOD image + one mislabeled image) that individually seem borderline but collectively indicate malicious intent.",
+          "mitigation": "Combines weighted scores across all active detectors; flags contributor with AssetType.SOURCE finding when cumulative z-score >= 1.5 and anomaly count >= 2."
+        },
+        {
+          "name": "Source Contamination Concentration",
+          "description": "Single vendor, hardware device, or data collector experiencing systematic calibration corruption across multiple modalities.",
+          "mitigation": "Provides clear evidence tracking all affected sample keys and active detector channels for audit quarantine."
+        }
+      ],
+      "uncovered_attack_classes": [
+        {
+          "name": "Sybil Identity Rotation Across Ingest Windows",
+          "reason": "An adversary rotating disposable contributor identifiers on every image submission evades batch-local source grouping without cross-batch identity correlation."
+        }
+      ]
+    },
+    {
+      "id": "cvguard.modelplane.sandbox_verifier:v1.0",
+      "name": "Sandboxed Model Checkpoint Loader and Serialization Verifier",
+      "mechanism": "POSIX/gVisor isolated container subprocess boundary, magic byte verification, raw pickle blocking, and hard resource caps (RLIMIT_AS, RLIMIT_CPU, wall-clock timeout)",
+      "covered_attack_classes": [
+        {
+          "name": "Arbitrary Code Execution via Deserialization Exploits",
+          "description": "Hostile model files containing Python pickle __reduce__ exploit payloads or executable native code attempting host compromise.",
+          "mitigation": "Blocks raw pickles; enforces torch.jit.load with weights_only=True fallback; executes all loading in isolated, network-isolated child process."
+        },
+        {
+          "name": "Denial-of-Service via Computational Hangs and Memory Exhaustion",
+          "description": "Adversary uploading infinite-loop graphs or multi-gigabyte allocation bombs to crash the model evaluation service.",
+          "mitigation": "Enforces 1GB address-space limits (SIGSEGV/OOM interception), 15s CPU limit (SIGXCPU), and 20s wall-clock timeout with process group SIGKILL."
+        },
+        {
+          "name": "Archive Header Zip-Slip Directory Traversal",
+          "description": "Crafted TorchScript zip archives containing relative path escapes ('../') targeting host filesystem overwrite.",
+          "mitigation": "Pre-flight archive header inspection rejects any archive entry with parent directory escapes or absolute paths."
+        }
+      ],
+      "uncovered_attack_classes": [
+        {
+          "name": "Zero-Day Host Kernel Exploits Under Stand-in Subprocess Sandbox",
+          "reason": "Before upgrading to hardware-enforced gVisor (runsc) or Firecracker microVMs in production, process-level isolation shares the host kernel."
+        },
+        {
+          "name": "Hardware Microarchitectural Side Channels",
+          "reason": "Does not protect against Spectre/Meltdown CPU cache timing attacks across shared cores."
+        }
+      ]
+    },
+    {
+      "id": "cvguard.modelplane.weight_fingerprint:v1.0",
+      "name": "White-Box Weight & Parameter Statistical Fingerprint Detector",
+      "mechanism": "Layer-wise parameter distribution moment analysis (mean, standard deviation, L2 norm, and sparsity) against declared architecture envelopes",
+      "covered_attack_classes": [
+        {
+          "name": "Coarse Weight Tampering and Backdoor Weight Spikes",
+          "description": "Tampered neural network weights modified with massive weight scaling or abnormal norm spikes to force dominant trigger routing.",
+          "mitigation": "Flags layers exceeding expected L2 norm ceilings or standard deviation bounds for the declared architecture."
+        },
+        {
+          "name": "Numerical Denial of Service via NaN and Inf Weight Poisoning",
+          "description": "Adversary injecting NaN or Infinity values into weights to cause silent downstream inference breakdown.",
+          "mitigation": "Full tensor scan for NaN/Inf values; generates CRITICAL severity finding with QUARANTINE disposition."
+        },
+        {
+          "name": "Extreme Layer Sparing and Pruning Tampering",
+          "description": "Adversary zeroing out critical convolutional filters or attention heads.",
+          "mitigation": "Monitors per-layer zero sparsity against architecture-specific thresholds."
+        }
+      ],
+      "uncovered_attack_classes": [
+        {
+          "name": "Manifold-Constrained / Clean-Weight Backdoors",
+          "reason": "Subtle, gradient-regularized backdoor insertions (e.g. TrojNN or clean-label attacks) that maintain natural layer-wide statistical moments evade moment-based fingerprinting."
+        },
+        {
+          "name": "Architectural Trigger Mechanisms Unavailable in Black-Box Mode",
+          "reason": "Detector is strictly skipped when only query access is provided (cannot inspect weights without white-box access)."
+        }
+      ]
+    },
+    {
+      "id": "cvguard.modelplane.activation_clustering:v1.0",
+      "name": "White-Box Penultimate Activation Clustering Detector",
+      "mechanism": "KMeans (k=2) sub-clustering and silhouette separation analysis on penultimate-layer feature representations of probe samples",
+      "covered_attack_classes": [
+        {
+          "name": "Targeted Backdoor Poisoning with Latent Feature Segregation",
+          "description": "Backdoored vision models where triggered samples activate a distinct latent cluster compared to legitimate class samples.",
+          "mitigation": "Per-class KMeans k=2 clustering flags classes exhibiting high inter-cluster separation (ratio >= 2.2) and a 5%-40% minority sub-cluster."
+        }
+      ],
+      "uncovered_attack_classes": [
+        {
+          "name": "Backdoors Requiring Unrepresented Trigger Mechanisms in Probe Set",
+          "reason": "Activation clustering assumes access to a labeled probe set representative of training classes; triggers unrepresented in the probe set do not activate latent sub-clusters."
+        },
+        {
+          "name": "Legitimate Multimodal Semantic Sub-Classes",
+          "reason": "Broad semantic categories with distinct visual subclasses (e.g., convertibles vs vans in 'automobile') can trigger benign sub-cluster separation."
+        }
+      ]
+    },
+    {
+      "id": "cvguard.modelplane.strip_blackbox:v1.0",
+      "name": "Black-Box STRIP (STRong Intentional Perturbation) Backdoor Detector",
+      "mechanism": "Output prediction Shannon entropy evaluation across intentional input superposition blending perturbations",
+      "covered_attack_classes": [
+        {
+          "name": "Dominant Trigger-Driven Backdoors",
+          "description": "Models compromised with high-confidence backdoor triggers where the trigger overrides input perturbations and persistently predicts the target class.",
+          "mitigation": "Superimposes probe images with random backgrounds; flags inputs whose prediction entropy drops below 0.45 bits."
+        }
+      ],
+      "uncovered_attack_classes": [
+        {
+          "name": "Backdoors Requiring Architectural Trigger Mechanisms Unavailable in Black-Box Mode",
+          "reason": "Pure query-only mode cannot inspect weight tensors or internal activation maps."
+        },
+        {
+          "name": "Dynamic and Composite Backdoors",
+          "reason": "Triggers that depend on exact spatial positioning or multiple simultaneous conditions may deactivate under heavy image superposition."
+        }
+      ]
+    },
+    {
+      "id": "cvguard.modelplane.reference_battery:v1.0",
+      "name": "Canonical Reference Battery Behavioral Envelope Detector",
+      "mechanism": "Fixed, versioned canonical vision reference battery running against model outputs to evaluate prediction confidence and entropy envelopes",
+      "covered_attack_classes": [
+        {
+          "name": "Severe Model Degradation and Class Fixation",
+          "description": "Broken, corrupted, or malicious models that output constant predictions, inverted classes, or zero confidence across standard visual inputs.",
+          "mitigation": "Compares output probabilities against documented min/max confidence and entropy bounds for 5 canonical vision probes."
+        }
+      ],
+      "uncovered_attack_classes": [
+        {
+          "name": "Task-Divergent Domain Models",
+          "reason": "Specialized models trained on custom medical, satellite, or non-classification tasks will not match canonical general vision envelopes."
+        }
+      ]
+    },
+    {
+      "id": "cvguard.inferenceplane.atomic_sequence:v1.0",
+      "name": "Database-Enforced Atomic Monotonic Sequence Allocator",
+      "mechanism": "PostgreSQL row-level locking and unique constraint (model_id, sequence_number) on append transactions",
+      "covered_attack_classes": [
+        {
+          "name": "Inference Request Replay and Sequence Duplication",
+          "description": "Adversary re-submitting previously observed inference payloads or forging sequence numbers to duplicate transactions.",
+          "mitigation": "Strict atomic increment (INSERT ... ON CONFLICT DO UPDATE) and database UNIQUE constraint rejects replayed sequence numbers with HTTP 409 Conflict."
+        },
+        {
+          "name": "Out-of-Order Execution and Gap Injection",
+          "description": "Adversary reordering requests or injecting gaps to invalidate temporal provenance or hide malicious queries.",
+          "mitigation": "Enforces contiguous monotonic sequence numbers per registered model identity."
+        }
+      ],
+      "uncovered_attack_classes": [
+        {
+          "name": "Pre-Network Client Interception Prior to Ingress",
+          "reason": "Sequence numbers protect against post-ingress replay; unauthorized requests generated prior to network ingress require client mTLS or application auth tokens."
+        }
+      ]
+    },
+    {
+      "id": "cvguard.inferenceplane.binding_verifier:v1.0",
+      "name": "Cryptographic Inference Tuple Binding Verifier",
+      "mechanism": "Canonical JSON serialization and SHA-256 digest over (sequence_number, model_id, input_hash, config_hash, output_hash)",
+      "covered_attack_classes": [
+        {
+          "name": "Post-Hoc Output Substitution / Label Tampering",
+          "description": "Attacker modifying inference predictions or confidence scores after execution to disguise model failures.",
+          "mitigation": "Recomputing canonical record binding digest immediately exposes any discrepancy between stored and computed values."
+        },
+        {
+          "name": "Input Image Substitution and Model Weight Swapping",
+          "description": "Claiming an inference prediction belongs to a different input image or an approved baseline model checkpoint.",
+          "mitigation": "Cryptographic binding ties raw input SHA-256 and model weight identifier into the immutable leaf hash."
+        }
+      ],
+      "uncovered_attack_classes": [
+        {
+          "name": "Physical Sensor and Lens Spoofing Prior to Digitization",
+          "reason": "Cryptographic binding guarantees digital provenance of acquired bytes, not physical authenticity of the photons captured."
+        }
+      ]
+    },
+    {
+      "id": "cvguard.inferenceplane.merkle_batcher:v1.0",
+      "name": "Cryptographic Merkle Batch Aggregator & Governance Sealer",
+      "mechanism": "Bottom-up binary Merkle tree aggregation over record binding hashes, sealed with Ed25519 signatures in the Governance Spine",
+      "covered_attack_classes": [
+        {
+          "name": "Batch Truncation and Selective Record Deletion",
+          "description": "Adversary attempting to erase incriminating inference queries from audit logs.",
+          "mitigation": "Individual inference records are bound to batch Merkle roots sealed in the immutable, hash-chained governance ledger."
+        },
+        {
+          "name": "Audit Proof Forgery",
+          "description": "Fabricating proof paths for records not executed in the reported batch.",
+          "mitigation": "Merkle proof verification mathematically guarantees inclusion under the signed root; tampered proofs fail verification."
+        }
+      ],
+      "uncovered_attack_classes": [
+        {
+          "name": "Side-Channel Information Leakage During Execution",
+          "reason": "Batch sealing guarantees integrity and non-repudiation of outputs, but does not prevent hardware side-channel observation (e.g. power analysis, cache timing)."
+        }
+      ]
+    }
+  ]
+}

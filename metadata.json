@@ -1,0 +1,6 @@
+{
+  "name": "CVGuard Scaffold",
+  "description": "CVGuard offline/air-gapped Computer Vision Integrity Assurance platform: Phase 3 Complete Data Plane with pHash, OOD Mahalanobis, kNN Label-Flip, FFT Spectral Trigger, and Unified Source Aggregator.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

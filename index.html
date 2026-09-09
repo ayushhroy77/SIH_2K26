@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CVGuard Scaffold - Offline Computer Vision Integrity Assurance</title>
+    <meta name="description" content="CVGuard offline/air-gapped Computer Vision Integrity Assurance platform: Phase 3 Complete Data Plane with pHash, OOD Mahalanobis, kNN Label-Flip, FFT Spectral Trigger, and Unified Source Aggregator." />
+    <meta property="og:title" content="CVGuard Scaffold - Offline Computer Vision Integrity Assurance" />
+    <meta property="og:description" content="CVGuard offline/air-gapped Computer Vision Integrity Assurance platform: Phase 3 Complete Data Plane with pHash, OOD Mahalanobis, kNN Label-Flip, FFT Spectral Trigger, and Unified Source Aggregator." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <script>
+      (function() {
+        try {
+          var originalDefineProperty = Object.defineProperty;
+          Object.defineProperty = function(obj, prop, descriptor) {
+            if ((obj === window || (typeof window !== 'undefined' && obj === window.constructor?.prototype)) && prop === 'fetch') {
+              if (descriptor && descriptor.get && !descriptor.set) {
+                var getter = descriptor.get;
+                var customFetch = null;
+                return originalDefineProperty.call(Object, obj, prop, {
+                  get: function() {
+                    return customFetch || getter.call(this);
+                  },
+                  set: function(val) {
+                    customFetch = val;
+                  },
+                  configurable: true,
+                  enumerable: descriptor.enumerable !== false
+                });
+              }
+            }
+            return originalDefineProperty.apply(Object, arguments);
+          };
+        } catch (e) {}
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+

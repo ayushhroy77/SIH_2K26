@@ -1,0 +1,23 @@
+[build-system]
+requires = ["hatchling>=1.21.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cvguard-model-plane"
+version = "0.2.0"
+description = "CVGuard Model Plane Service: Sandboxed Checkpoint Verification and Weight Integrity Scanner"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.110.0,<1.0.0",
+    "uvicorn[standard]>=0.28.0,<1.0.0",
+    "pydantic>=2.7.0,<3.0.0",
+    "cvguard-schemas>=0.1.0",
+    "httpx>=0.27.0",
+    "python-multipart>=0.0.9",
+    "numpy>=1.26.0",
+    "scipy>=1.12.0",
+    "scikit-learn>=1.4.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]

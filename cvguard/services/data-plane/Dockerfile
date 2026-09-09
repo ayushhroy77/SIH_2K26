@@ -1,0 +1,43 @@
+# Multi-stage Dockerfile for CVGuard Data Plane Service
+# Pinned Python 3.12 base image for deterministic, reproducible builds
+FROM python:3.12.9-slim-bookworm AS builder
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+WORKDIR /build
+
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+COPY libs/schemas /build/libs/schemas
+RUN pip install --no-deps /build/libs/schemas
+
+COPY services/data-plane/pyproject.toml /build/services/data-plane/
+RUN pip install "fastapi>=0.110.0,<1.0.0" "uvicorn[standard]>=0.28.0,<1.0.0" "pydantic>=2.7.0,<3.0.0" "minio>=7.2.0" "pillow>=10.2.0" "imagehash>=4.3.1" "psycopg[binary]>=3.1.18" "httpx>=0.27.0" "python-multipart>=0.0.9" "numpy>=1.26.0" "scipy>=1.12.0" "onnxruntime>=1.17.0"
+
+# --- Runtime Stage ---
+FROM python:3.12.9-slim-bookworm AS runner
+
+RUN groupadd --system --gid 10001 appgroup && \
+    useradd --system --uid 10001 --gid appgroup --shell /bin/false --no-create-home appuser
+
+ENV PATH="/opt/venv/bin:$PATH" \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+COPY --from=builder --chown=appuser:appgroup /opt/venv /opt/venv
+COPY --chown=appuser:appgroup services/data-plane/ /app/
+
+USER appuser:appgroup
+
+EXPOSE 8001
+
+HEALTHCHECK --interval=15s --timeout=3s --start-period=5s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')" || exit 1
+
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001"]

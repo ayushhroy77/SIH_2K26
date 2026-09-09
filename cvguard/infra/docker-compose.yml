@@ -1,6 +1,6 @@
 # ==============================================================================
 # CVGuard Monorepo Local Orchestration Compose
-# Phase 0: Six Stateless FastAPI Planes + Offline Datastores (Postgres 16, Redis 7, MinIO)
+# Phase 8: Hardened Architecture with Internal mTLS, Keycloak RBAC, and Datastores
 # ==============================================================================
 
 version: "3.8"
@@ -14,10 +14,12 @@ volumes:
     name: cvguard_postgres_data
   minio_data:
     name: cvguard_minio_data
+  keycloak_data:
+    name: cvguard_keycloak_data
 
 services:
   # ----------------------------------------------------------------------------
-  # Foundation Datastores
+  # Foundation Datastores & Identity Provider
   # ----------------------------------------------------------------------------
   postgres:
     image: postgres:16-alpine
@@ -90,8 +92,31 @@ services:
       timeout: 5s
       retries: 5
 
+  keycloak:
+    image: quay.io/keycloak/keycloak:24.0.5
+    container_name: cvguard-keycloak
+    restart: unless-stopped
+    command: start-dev --import-realm
+    environment:
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+      KC_HEALTH_ENABLED: "true"
+      KC_HTTP_PORT: 8080
+    ports:
+      - "${KEYCLOAK_PORT:-8080}:8080"
+    volumes:
+      - ./keycloak/cvguard-realm.json:/opt/keycloak/data/import/cvguard-realm.json:ro
+      - keycloak_data:/opt/keycloak/data
+    networks:
+      - cvguard-net
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/8080 && echo -e 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && cat <&3 | grep -q '200 OK'"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
   # ----------------------------------------------------------------------------
-  # CVGuard Stateless FastAPI Services
+  # CVGuard Stateless FastAPI Services with Internal mTLS
   # ----------------------------------------------------------------------------
   gateway:
     build:
@@ -105,13 +130,25 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD}
-      INTERNAL_GOVERNANCE_URL: ${INTERNAL_GOVERNANCE_URL:-http://governance:8005}
-      INTERNAL_DATA_PLANE_URL: ${INTERNAL_DATA_PLANE_URL:-http://data-plane:8001}
+      INTERNAL_GOVERNANCE_URL: ${INTERNAL_GOVERNANCE_URL:-https://governance:8005}
+      INTERNAL_DATA_PLANE_URL: ${INTERNAL_DATA_PLANE_URL:-https://data-plane:8001}
+      KEYCLOAK_URL: ${KEYCLOAK_URL:-http://keycloak:8080}
+      KEYCLOAK_REALM: ${KEYCLOAK_REALM:-cvguard}
+      CVGUARD_MTLS_ENABLED: ${CVGUARD_MTLS_ENABLED:-true}
+      CVGUARD_CA_CERT_PATH: /etc/cvguard/certs/ca.crt
+      CVGUARD_CERT_PATH: /etc/cvguard/certs/service.crt
+      CVGUARD_KEY_PATH: /etc/cvguard/certs/service.key
+    volumes:
+      - ./certs/ca.crt:/etc/cvguard/certs/ca.crt:ro
+      - ./certs/gateway/gateway.crt:/etc/cvguard/certs/service.crt:ro
+      - ./certs/gateway/gateway.key:/etc/cvguard/certs/service.key:ro
     ports:
       - "${GATEWAY_PORT:-8000}:8000"
     depends_on:
       redis:
         condition: service_healthy
+      keycloak:
+        condition: service_started
       governance:
         condition: service_started
       data-plane:
@@ -136,8 +173,16 @@ services:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      INTERNAL_GOVERNANCE_URL: ${INTERNAL_GOVERNANCE_URL:-http://governance:8005}
+      INTERNAL_GOVERNANCE_URL: ${INTERNAL_GOVERNANCE_URL:-https://governance:8005}
       HAMMING_DISTANCE_THRESHOLD: ${HAMMING_DISTANCE_THRESHOLD:-10}
+      CVGUARD_MTLS_ENABLED: ${CVGUARD_MTLS_ENABLED:-true}
+      CVGUARD_CA_CERT_PATH: /etc/cvguard/certs/ca.crt
+      CVGUARD_CERT_PATH: /etc/cvguard/certs/service.crt
+      CVGUARD_KEY_PATH: /etc/cvguard/certs/service.key
+    volumes:
+      - ./certs/ca.crt:/etc/cvguard/certs/ca.crt:ro
+      - ./certs/data-plane/data-plane.crt:/etc/cvguard/certs/service.crt:ro
+      - ./certs/data-plane/data-plane.key:/etc/cvguard/certs/service.key:ro
     ports:
       - "${DATA_PLANE_PORT:-8001}:8001"
     depends_on:
@@ -165,7 +210,15 @@ services:
       MINIO_ENDPOINT: minio:9000
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
-      INTERNAL_GOVERNANCE_URL: ${INTERNAL_GOVERNANCE_URL:-http://governance:8005}
+      INTERNAL_GOVERNANCE_URL: ${INTERNAL_GOVERNANCE_URL:-https://governance:8005}
+      CVGUARD_MTLS_ENABLED: ${CVGUARD_MTLS_ENABLED:-true}
+      CVGUARD_CA_CERT_PATH: /etc/cvguard/certs/ca.crt
+      CVGUARD_CERT_PATH: /etc/cvguard/certs/service.crt
+      CVGUARD_KEY_PATH: /etc/cvguard/certs/service.key
+    volumes:
+      - ./certs/ca.crt:/etc/cvguard/certs/ca.crt:ro
+      - ./certs/model-plane/model-plane.crt:/etc/cvguard/certs/service.crt:ro
+      - ./certs/model-plane/model-plane.key:/etc/cvguard/certs/service.key:ro
     ports:
       - "${MODEL_PLANE_PORT:-8002}:8002"
     depends_on:
@@ -193,9 +246,18 @@ services:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      INTERNAL_GOVERNANCE_URL: http://governance:8005
+      INTERNAL_GOVERNANCE_URL: ${INTERNAL_GOVERNANCE_URL:-https://governance:8005}
+      INTERNAL_MODEL_PLANE_URL: ${INTERNAL_MODEL_PLANE_URL:-https://model-plane:8002}
       BATCH_MAX_SIZE: 100
       BATCH_FLUSH_INTERVAL_SECONDS: 5.0
+      CVGUARD_MTLS_ENABLED: ${CVGUARD_MTLS_ENABLED:-true}
+      CVGUARD_CA_CERT_PATH: /etc/cvguard/certs/ca.crt
+      CVGUARD_CERT_PATH: /etc/cvguard/certs/service.crt
+      CVGUARD_KEY_PATH: /etc/cvguard/certs/service.key
+    volumes:
+      - ./certs/ca.crt:/etc/cvguard/certs/ca.crt:ro
+      - ./certs/inference-plane/inference-plane.crt:/etc/cvguard/certs/service.crt:ro
+      - ./certs/inference-plane/inference-plane.key:/etc/cvguard/certs/service.key:ro
     ports:
       - "${INFERENCE_PLANE_PORT:-8003}:8003"
     depends_on:
@@ -222,11 +284,22 @@ services:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      INTERNAL_GOVERNANCE_URL: ${INTERNAL_GOVERNANCE_URL:-https://governance:8005}
+      CVGUARD_MTLS_ENABLED: ${CVGUARD_MTLS_ENABLED:-true}
+      CVGUARD_CA_CERT_PATH: /etc/cvguard/certs/ca.crt
+      CVGUARD_CERT_PATH: /etc/cvguard/certs/service.crt
+      CVGUARD_KEY_PATH: /etc/cvguard/certs/service.key
+    volumes:
+      - ./certs/ca.crt:/etc/cvguard/certs/ca.crt:ro
+      - ./certs/drift-plane/drift-plane.crt:/etc/cvguard/certs/service.crt:ro
+      - ./certs/drift-plane/drift-plane.key:/etc/cvguard/certs/service.key:ro
     ports:
       - "${DRIFT_PLANE_PORT:-8004}:8004"
     depends_on:
       postgres:
         condition: service_healthy
+      governance:
+        condition: service_started
     networks:
       - cvguard-net
 
@@ -242,17 +315,22 @@ services:
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
       POSTGRES_DB: ${POSTGRES_DB}
-      # Dedicated restricted database role for append-only audit ledger operations
       POSTGRES_USER: ${POSTGRES_LEDGER_USER:-cvguard_ledger}
       POSTGRES_PASSWORD: ${POSTGRES_LEDGER_PASSWORD:-cvguard_ledger_secret_change_me_in_prod}
-      # Admin credentials fallback for maintenance/migration if needed
       POSTGRES_ADMIN_USER: ${POSTGRES_USER}
       POSTGRES_ADMIN_PASSWORD: ${POSTGRES_PASSWORD}
       CVGUARD_SIGNING_KEY_PATH: /app/secrets/governance_ed25519.pem
       MINIO_ENDPOINT: minio:9000
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      CVGUARD_MTLS_ENABLED: ${CVGUARD_MTLS_ENABLED:-true}
+      CVGUARD_CA_CERT_PATH: /etc/cvguard/certs/ca.crt
+      CVGUARD_CERT_PATH: /etc/cvguard/certs/service.crt
+      CVGUARD_KEY_PATH: /etc/cvguard/certs/service.key
     volumes:
+      - ./certs/ca.crt:/etc/cvguard/certs/ca.crt:ro
+      - ./certs/governance/governance.crt:/etc/cvguard/certs/service.crt:ro
+      - ./certs/governance/governance.key:/etc/cvguard/certs/service.key:ro
       - ../services/governance/secrets:/app/secrets
     ports:
       - "${GOVERNANCE_PORT:-8005}:8005"

@@ -14,13 +14,13 @@ WORKDIR /build
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
+# Install locked dependencies with cryptographic hash verification
+COPY services/gateway/requirements.txt /build/services/gateway/
+RUN pip install --no-cache-dir --require-hashes -r /build/services/gateway/requirements.txt
+
 # Copy and install internal shared schemas package
 COPY libs/schemas /build/libs/schemas
 RUN pip install --no-deps /build/libs/schemas
-
-# Install service dependencies
-COPY services/gateway/pyproject.toml /build/services/gateway/
-RUN pip install "fastapi>=0.110.0,<1.0.0" "uvicorn[standard]>=0.28.0,<1.0.0" "pydantic>=2.7.0,<3.0.0" "httpx>=0.27.0" "python-multipart>=0.0.9"
 
 # --- Runtime Stage ---
 FROM python:3.12.9-slim-bookworm AS runner

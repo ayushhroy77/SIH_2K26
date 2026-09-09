@@ -49,6 +49,9 @@ activation_detector = ActivationClusteringDetector()
 strip_detector = STRIPDetector()
 battery_detector = ReferenceBatteryDetector()
 
+# In-memory registry for ingested models and weight digests
+MODEL_REGISTRY: dict[str, dict[str, Any]] = {}
+
 
 class ModelAccessLevel(str, Enum):
     """Access level available at model evaluation time."""
@@ -313,8 +316,20 @@ async def ingest_model(
         f"Status: {'QUARANTINED (High/Critical risk)' if has_blocking_anomaly else 'PASSED'}"
     )
 
+    model_uuid = str(uuid.uuid4())
+    MODEL_REGISTRY[model_uuid] = {
+        "model_id": model_uuid,
+        "weight_digest": file_sha256,
+        "file_sha256": file_sha256,
+        "asset_ref": asset_ref,
+        "model_name": assigned_name,
+        "declared_architecture": declared_architecture,
+        "access_level": access_level.value,
+        "safe_to_deploy": not has_blocking_anomaly,
+    }
+
     return ModelAssessmentResponse(
-        model_id=str(uuid.uuid4()),
+        model_id=model_uuid,
         asset_ref=asset_ref,
         access_level=access_level,
         safe_to_deploy=not has_blocking_anomaly,
@@ -404,8 +419,21 @@ async def ingest_model_query(request: BlackBoxIngestRequest) -> ModelAssessmentR
         f"Status: {'QUARANTINED' if has_blocking_anomaly else 'PASSED'}"
     )
 
+    query_weight_digest = hashlib.sha256(request.endpoint_url.encode("utf-8")).hexdigest()
+    model_uuid = str(uuid.uuid4())
+    MODEL_REGISTRY[model_uuid] = {
+        "model_id": model_uuid,
+        "weight_digest": query_weight_digest,
+        "file_sha256": query_weight_digest,
+        "asset_ref": asset_ref,
+        "model_name": request.model_name,
+        "declared_architecture": request.declared_architecture,
+        "access_level": access_level.value,
+        "safe_to_deploy": not has_blocking_anomaly,
+    }
+
     return ModelAssessmentResponse(
-        model_id=str(uuid.uuid4()),
+        model_id=model_uuid,
         asset_ref=asset_ref,
         access_level=access_level,
         safe_to_deploy=not has_blocking_anomaly,
@@ -416,5 +444,39 @@ async def ingest_model_query(request: BlackBoxIngestRequest) -> ModelAssessmentR
     )
 
 
+@app.get("/models/{model_id}")
+async def get_model(model_id: str) -> dict[str, Any]:
+    """Retrieve stored record for an ingested model, including its weight digest."""
+    if model_id in MODEL_REGISTRY:
+        return MODEL_REGISTRY[model_id]
+    for m in MODEL_REGISTRY.values():
+        if m["weight_digest"] == model_id or m["asset_ref"] == model_id:
+            return m
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail=f"Model '{model_id}' not found in model-plane registry.",
+    )
+
+
+@app.get("/models")
+async def list_models() -> list[dict[str, Any]]:
+    """List all ingested models and their weight digests."""
+    return list(MODEL_REGISTRY.values())
+
+
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8002, reload=False)
+    mtls = os.getenv("CVGUARD_MTLS_ENABLED", "false").lower() in ("true", "1", "yes")
+    ssl_kwargs: dict[str, Any] = {}
+    if mtls:
+        import ssl
+        cert_path = os.getenv("CVGUARD_CERT_PATH", "/etc/cvguard/certs/service.crt")
+        key_path = os.getenv("CVGUARD_KEY_PATH", "/etc/cvguard/certs/service.key")
+        ca_path = os.getenv("CVGUARD_CA_CERT_PATH", "/etc/cvguard/certs/ca.crt")
+        if os.path.isfile(cert_path) and os.path.isfile(key_path) and os.path.isfile(ca_path):
+            ssl_kwargs = {
+                "ssl_certfile": cert_path,
+                "ssl_keyfile": key_path,
+                "ssl_ca_certs": ca_path,
+                "ssl_cert_reqs": ssl.CERT_REQUIRED,
+            }
+    uvicorn.run("main:app", host="0.0.0.0", port=8002, reload=False, **ssl_kwargs)

@@ -1,10 +1,10 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "platform": "CVGuard",
-  "component": "Data Plane, Model Plane, and Inference Plane",
-  "version": "0.5.0",
+  "component": "Data Plane, Model Plane, Inference Plane, and Drift Plane",
+  "version": "0.6.0",
   "last_updated": "2026-09-09",
-  "summary": "Threat model and attack class coverage manifest for the CVGuard Data Plane, Model Plane, and Inference Plane integrity assurance suite.",
+  "summary": "Threat model and attack class coverage manifest for the CVGuard Data Plane, Model Plane, Inference Plane, and Drift Plane integrity assurance suite.",
   "detectors": [
     {
       "id": "cvguard.detector.phash_near_duplicate:v1.0",
@@ -308,6 +308,10 @@
       ],
       "uncovered_attack_classes": [
         {
+          "name": "Compromised Inference Process Producing Incorrect Output",
+          "reason": "Does not prevent a compromised inference process from producing a wrong-but-honestly-recorded output — this binds provenance, it does not validate correctness of the output itself."
+        },
+        {
           "name": "Physical Sensor and Lens Spoofing Prior to Digitization",
           "reason": "Cryptographic binding guarantees digital provenance of acquired bytes, not physical authenticity of the photons captured."
         }
@@ -333,6 +337,42 @@
         {
           "name": "Side-Channel Information Leakage During Execution",
           "reason": "Batch sealing guarantees integrity and non-repudiation of outputs, but does not prevent hardware side-channel observation (e.g. power analysis, cache timing)."
+        }
+      ]
+    },
+    {
+      "id": "cvguard.driftplane.distribution_verifier:v1.0",
+      "name": "Covariate Shift and Distribution Drift Verifier (MMD & KS-Test)",
+      "mechanism": "Maximum Mean Discrepancy (MMD) with RBF kernel and per-dimension Kolmogorov-Smirnov (KS) two-sample hypothesis testing over visual embeddings, combined with metadata contingency correlation to classify operational drift vs. suspicious manipulation vs. indeterminate.",
+      "covered_attack_classes": [
+        {
+          "name": "Embedding-Distribution Covariate Shift",
+          "description": "Systematic or localized distribution divergence from declared normal operational baseline embeddings.",
+          "mitigation": "Quantifies statistical distance using MMD and per-dimension KS-tests; produces calibrated risk scores with 95% confidence intervals and standard errors."
+        },
+        {
+          "name": "Systematic Operational and Environmental Drift",
+          "description": "Legitimate changes in sensor hardware, illumination, season, or time window altering feature distributions.",
+          "mitigation": "Correlates shifted sample subset with metadata field changes (e.g. novel sensor_id or temporal cluster) to classify as probable_operational_drift."
+        },
+        {
+          "name": "Targeted Subpopulation Poisoning and Backdoor Trigger Injection",
+          "description": "Adversarial manipulation affecting a localized subset of query samples without operational metadata attribution.",
+          "mitigation": "Identifies isolated shifted sample clusters (5-35% of batch) with zero metadata correlation to classify as suspicious_manipulation with QUARANTINE disposition."
+        }
+      ],
+      "uncovered_attack_classes": [
+        {
+          "name": "Unattributed Shift with Missing Metadata",
+          "reason": "Cannot classify shift when no metadata is provided — falls back to indeterminate rather than guessing."
+        },
+        {
+          "name": "Non-Visual Metadata-Only Drift",
+          "reason": "Does not detect drift restricted to non-visual metadata channels this system doesn't observe (e.g., changes in network routing, upstream metadata spoofing with identical imagery)."
+        },
+        {
+          "name": "Adversarially-Crafted Metadata Camouflage",
+          "reason": "Does not prevent an adversary who can forge metadata fields from disguising localized manipulation as operational sensor drift."
         }
       ]
     }

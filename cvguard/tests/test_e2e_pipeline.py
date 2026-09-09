@@ -16,6 +16,7 @@ import pytest
 from PIL import Image, ImageDraw
 
 from cvguard_schemas import AssetType, Finding, Severity, SignedFinding
+from cvguard_schemas.security import create_test_jwt
 
 
 def create_synthetic_test_image(
@@ -163,6 +164,9 @@ def test_full_pipeline_via_gateway(image_test_set):
     except Exception as exc:
         pytest.skip(f"Live Gateway not reachable at {gateway_url} ({exc}); skipping network E2E run.")
 
+    # Setup auth token for hardened gateway
+    auth_headers = {"Authorization": f"Bearer {create_test_jwt(roles=['analyst', 'admin', 'auditor'])}"}
+
     # 1. POST /ingest/images with test image set
     files = image_test_set["files"]
     data = {
@@ -174,6 +178,7 @@ def test_full_pipeline_via_gateway(image_test_set):
         f"{gateway_url}/ingest/images",
         files=files,
         data=data,
+        headers=auth_headers,
         timeout=30.0,
     )
     assert ingest_resp.status_code == 201, (
@@ -208,7 +213,7 @@ def test_full_pipeline_via_gateway(image_test_set):
     assert source_finding["severity"] == Severity.HIGH.value
 
     # 4. Query GET /findings via Gateway
-    findings_resp = httpx.get(f"{gateway_url}/findings?limit=20", timeout=10.0)
+    findings_resp = httpx.get(f"{gateway_url}/findings?limit=20", headers=auth_headers, timeout=10.0)
     assert findings_resp.status_code == 200
     all_findings = findings_resp.json()
     ledger_ids = [item["ledger_id"] for item in all_findings]
@@ -216,7 +221,7 @@ def test_full_pipeline_via_gateway(image_test_set):
     assert source_findings[0]["ledger_id"] in ledger_ids
 
     # 5. GET /audit/verify reports valid=true afterward
-    verify_resp = httpx.get(f"{gateway_url}/audit/verify", timeout=10.0)
+    verify_resp = httpx.get(f"{gateway_url}/audit/verify", headers=auth_headers, timeout=10.0)
     assert verify_resp.status_code == 200
     audit_data = verify_resp.json()
     assert audit_data["valid"] is True, f"Audit verification failed: {audit_data}"

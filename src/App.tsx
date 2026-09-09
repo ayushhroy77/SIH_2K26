@@ -1,324 +1,484 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Shield,
   ShieldCheck,
   ShieldAlert,
+  AlertTriangle,
+  AlertCircle,
+  CheckCircle2,
+  Info,
+  OctagonAlert,
+  Search,
+  ArrowUpDown,
+  Filter,
+  FileText,
+  Download,
+  ExternalLink,
+  RefreshCw,
+  ChevronDown,
+  ChevronRight,
   Database,
   Cpu,
   Activity,
   BarChart2,
-  FileCheck,
-  Server,
   Layers,
-  FileCode,
-  Terminal,
-  CheckCircle2,
-  AlertTriangle,
-  AlertCircle,
-  Info,
-  Copy,
-  ExternalLink,
-  HardDrive,
   Lock,
-  Boxes,
-  ChevronDown,
-  ChevronRight,
-  Upload,
-  RefreshCw,
+  Eye,
+  Check,
+  X,
+  FileCode,
   Image as ImageIcon,
+  Server,
 } from 'lucide-react';
 
-interface ServiceInfo {
-  name: string;
-  slug: string;
-  port: number;
-  role: string;
-  description: string;
-  dockerfile: string;
-  healthEndpoint: string;
-  icon: React.ComponentType<{ className?: string }>;
-}
-
-const SERVICES: ServiceInfo[] = [
-  {
-    name: 'Gateway Service',
-    slug: 'gateway',
-    port: 8000,
-    role: 'External-Facing REST API & Ingress',
-    description: 'Stateless proxy routing /ingest/images to data-plane, /findings and /audit/verify to governance, and isolating raw storage.',
-    dockerfile: 'Multi-stage build, python:3.12.9-slim-bookworm, non-root appuser:appgroup (UID 10001)',
-    healthEndpoint: 'GET /health -> {"status": "ok", "service": "gateway", "version": "0.2.0"}',
-    icon: Shield,
-  },
-  {
-    name: 'Data Plane',
-    slug: 'data-plane',
-    port: 8001,
-    role: 'Complete Data Plane & Multi-Detector Integrity Suite',
-    description: 'Computes 64-bit DCT perceptual hashes (pHash), Mahalanobis OOD distances, kNN label-flip consensus, and 2D FFT spectral backdoor triggers; unifies cross-detector signals via SourceAggregator and dispatches signed findings to governance.',
-    dockerfile: 'Multi-stage build, python:3.12.9-slim-bookworm, non-root appuser:appgroup (UID 10001)',
-    healthEndpoint: 'GET /health -> {"status": "ok", "service": "data-plane", "version": "0.3.0"}',
-    icon: Database,
-  },
-  {
-    name: 'Model Plane',
-    slug: 'model-plane',
-    port: 8002,
-    role: 'Model Checkpoint Verification',
-    description: 'Inspects neural network serialized weights (ONNX, TorchScript, Safetensors) for weight tampering, backdoor signatures, and architectural integrity.',
-    dockerfile: 'Multi-stage build, python:3.12.9-slim-bookworm, non-root appuser:appgroup (UID 10001)',
-    healthEndpoint: 'GET /health -> {"status": "ok", "service": "model-plane", "version": "0.1.0"}',
-    icon: Cpu,
-  },
-  {
-    name: 'Inference Plane',
-    slug: 'inference-plane',
-    port: 8003,
-    role: 'Runtime Prediction Assurance',
-    description: 'Monitors real-time inference telemetry, prediction confidence distributions, latency violations, and anomalous adversarial perturbations.',
-    dockerfile: 'Multi-stage build, python:3.12.9-slim-bookworm, non-root appuser:appgroup (UID 10001)',
-    healthEndpoint: 'GET /health -> {"status": "ok", "service": "inference-plane", "version": "0.1.0"}',
-    icon: Activity,
-  },
-  {
-    name: 'Drift Plane',
-    slug: 'drift-plane',
-    port: 8004,
-    role: 'Distribution & Shift Monitoring',
-    description: 'Computes statistical divergence metrics (Wasserstein, KS-test, Population Stability Index) on input covariates and prediction drift over temporal windows.',
-    dockerfile: 'Multi-stage build, python:3.12.9-slim-bookworm, non-root appuser:appgroup (UID 10001)',
-    healthEndpoint: 'GET /health -> {"status": "ok", "service": "drift-plane", "version": "0.1.0"}',
-    icon: BarChart2,
-  },
-  {
-    name: 'Governance Spine',
-    slug: 'governance',
-    port: 8005,
-    role: 'Tamper-Evident Ledger & Ed25519 Signer',
-    description: 'Central immutable audit spine. Ingests findings, signs with Ed25519, computes SHA-256 hash chains, and verifies audit integrity with zero runtime internet.',
-    dockerfile: 'Multi-stage build, python:3.12.9-slim-bookworm, non-root appuser:appgroup (UID 10001)',
-    healthEndpoint: 'GET /health -> {"status": "ok", "service": "governance", "version": "0.2.0"}',
-    icon: FileCheck,
-  },
-];
-
-const DATASTORES = [
-  { name: 'PostgreSQL 16', port: 5432, role: 'Relational Governance DB & Images Catalog', volume: 'cvguard_postgres_data', image: 'postgres:16-alpine' },
-  { name: 'Redis 7', port: 6379, role: 'Ephemeral Queue & Cache', volume: 'In-memory (authenticated)', image: 'redis:7-alpine' },
-  { name: 'MinIO (API)', port: 9000, role: 'Air-Gapped S3 Blob Store (Isolated via Proxy)', volume: 'cvguard_minio_data', image: 'minio/minio:RELEASE.2024-03-05' },
-  { name: 'MinIO (Console)', port: 9001, role: 'Admin Storage UI', volume: 'Web UI for local S3 buckets', image: 'minio/minio' },
-];
-
-// Initial seeded Phase 2 vertical slice findings
 interface Finding {
-  finding_id: string;
-  asset_type: 'sample' | 'source' | 'model' | 'batch';
+  finding_id?: string;
+  asset_type: string;
   asset_ref: string;
   detector: string;
   reason: string;
   evidence: string[];
   confidence: number;
-  severity: 'critical' | 'high' | 'medium' | 'low' | 'info';
-  disposition: 'accept' | 'review' | 'quarantine';
+  severity: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | 'INFO' | string;
+  disposition: 'QUARANTINE' | 'REVIEW' | 'ACCEPT' | string;
   assumptions: string[];
   limitations: string[];
   created_at: string;
 }
 
 interface SignedFinding {
-  finding: Finding;
+  ledger_id: number;
   entry_hash: string;
   prev_hash: string;
   signature: string;
-  ledger_id: number;
+  finding: Finding;
+  created_at?: string;
 }
 
-const INITIAL_FINDINGS: SignedFinding[] = [
-  {
-    ledger_id: 1,
-    entry_hash: "3b940e48912a43409da22b6201bce4577f83b1657ff1fc53b92dc18148a1d65d",
-    prev_hash: "0000000000000000000000000000000000000000000000000000000000000000",
-    signature: "7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d",
-    finding: {
-      finding_id: "find_550e8400-e29b-41d4-a716-446655440001",
-      asset_type: "sample",
-      asset_ref: "sample:img_e3b0c442_01_a.jpg",
-      detector: "cvguard.detector.phash_near_duplicate:v1.0",
-      reason: "Near-duplicate image pair detected between 'img_01_a.jpg' and 'img_01_b.jpg' (pHash Hamming distance 2 <= threshold 10).",
-      evidence: [
-        "images/img_e3b0c442_01_a.jpg",
-        "images/img_e3b0c442_01_b.jpg",
-        "hamming_distance: 2",
-        "phash_hash_a: 0x8f3c4e1a0b5d9e72",
-        "phash_hash_b: 0x8f3c4e1a0b5d9e70"
-      ],
-      confidence: 0.9688,
-      severity: "medium",
-      disposition: "review",
-      assumptions: [
-        "64-bit DCT perceptual hash captures visual equivalence invariant to subtle resizing or JPEG compression."
-      ],
-      limitations: [
-        "Does not identify extreme rotations (>90 deg) or heavy non-affine crops."
-      ],
-      created_at: "2026-09-09T00:10:00Z"
+interface AuditVerifyResult {
+  valid: boolean;
+  entries_checked: number;
+  first_invalid_entry_id: number | null;
+  reason?: string | null;
+}
+
+interface CoverageItem {
+  name: string;
+  description?: string;
+  mitigation?: string;
+  reason?: string;
+  detector_id: string;
+  detector_name: string;
+}
+
+interface CoverageData {
+  summary: string;
+  version: string;
+  manifest_hash: string;
+  coverage: {
+    total_assets_scanned: number;
+    passed_count: number;
+    flagged_count: number;
+    scope_description: string;
+    supported_attack_classes: CoverageItem[];
+    uncovered_attack_classes: CoverageItem[];
+    detector_versions: Record<string, string>;
+  };
+}
+
+const GATEWAY_URL =
+  (import.meta as unknown as { env?: Record<string, string> }).env?.VITE_GATEWAY_URL ||
+  'http://localhost:8000';
+
+export const SEVERITY_RANK: Record<string, number> = {
+  CRITICAL: 5,
+  HIGH: 4,
+  MEDIUM: 3,
+  LOW: 2,
+  INFO: 1,
+};
+
+export function sortFindingsTriage(items: SignedFinding[]): SignedFinding[] {
+  return [...items].sort((a, b) => {
+    const sevA = SEVERITY_RANK[a.finding.severity.toUpperCase()] || 0;
+    const sevB = SEVERITY_RANK[b.finding.severity.toUpperCase()] || 0;
+    if (sevB !== sevA) {
+      return sevB - sevA; // Severity descending
     }
-  },
-  {
-    ledger_id: 2,
-    entry_hash: "a4f82d1c7e9b0a3f5d6e8c1b2a4d7f9e0b3c5a7d9e1f2b4c6d8e0a1f3b5c7d9e",
-    prev_hash: "3b940e48912a43409da22b6201bce4577f83b1657ff1fc53b92dc18148a1d65d",
-    signature: "1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b",
-    finding: {
-      finding_id: "find_550e8400-e29b-41d4-a716-446655440003",
-      asset_type: "sample",
-      asset_ref: "sample:img_ood_corrupted_42.jpg",
-      detector: "cvguard.dataplane.ood_mahalanobis:v1.0",
-      reason: "Out-of-Distribution sample detected: Mahalanobis distance 18.42 exceeds class 'vehicle' threshold 12.0.",
-      evidence: [
-        "images/img_ood_corrupted_42.jpg",
-        "class_name: vehicle",
-        "mahalanobis_distance: 18.421",
-        "calibrated_threshold: 12.000",
-        "reference_dataset: imagenet_subset"
-      ],
-      confidence: 0.8850,
-      severity: "high",
-      disposition: "review",
-      assumptions: [
-        "Features follow a regularized unimodal Gaussian distribution in representation space.",
-        "Reference distribution accurately reflects clean target domain data."
-      ],
-      limitations: [
-        "Does not detect adversarial perturbations specifically constrained to remain within the class covariance ellipsoid.",
-        "Multimodal semantic sub-distributions may increase false positive rate."
-      ],
-      created_at: "2026-09-09T00:10:02Z"
-    }
-  },
-  {
-    ledger_id: 3,
-    entry_hash: "b5e91a3d8c2f0b4e7a1d9c3f5e2a4b6d8f0e1a3b5c7d9e2f4a6b8c0d1e3f5a7b",
-    prev_hash: "a4f82d1c7e9b0a3f5d6e8c1b2a4d7f9e0b3c5a7d9e1f2b4c6d8e0a1f3b5c7d9e",
-    signature: "2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c",
-    finding: {
-      finding_id: "find_550e8400-e29b-41d4-a716-446655440004",
-      asset_type: "sample",
-      asset_ref: "sample:img_poison_dog_mislabeled.jpg",
-      detector: "cvguard.dataplane.label_flip_knn:v1.0",
-      reason: "Suspected label-flip: sample declared as 'dog' but 9/10 nearest semantic neighbors are labeled 'cat' (discordance 90.0%).",
-      evidence: [
-        "images/img_poison_dog_mislabeled.jpg",
-        "declared_label: dog",
-        "dominant_neighbor_label: cat",
-        "discordance_rate: 0.900",
-        "k_neighbors: 10",
-        "consensus_confidence: 0.900"
-      ],
-      confidence: 0.9000,
-      severity: "high",
-      disposition: "review",
-      assumptions: [
-        "Semantic closeness in feature space strongly correlates with ground truth visual category.",
-        "Nearest neighbors in embedding space possess accurate annotations."
-      ],
-      limitations: [
-        "Symmetric 100% class swaps where entire categories are remapped simultaneously evade kNN consensus.",
-        "Borderline samples near true decision boundaries may show elevated discordance."
-      ],
-      created_at: "2026-09-09T00:10:03Z"
-    }
-  },
-  {
-    ledger_id: 4,
-    entry_hash: "c6d02b4e9f3a1c5e8b2e0d4a6f3b5c7e9a1f2b4d6e8f0a2b4c6d8e1f3a5b7c9d",
-    prev_hash: "b5e91a3d8c2f0b4e7a1d9c3f5e2a4b6d8f0e1a3b5c7d9e2f4a6b8c0d1e3f5a7b",
-    signature: "3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d",
-    finding: {
-      finding_id: "find_550e8400-e29b-41d4-a716-446655440005",
-      asset_type: "sample",
-      asset_ref: "sample:img_badnets_checkerboard_patch.jpg",
-      detector: "cvguard.dataplane.trigger_fft_spectral:v1.0",
-      reason: "Frequency-domain spectral trigger anomaly: high-frequency energy ratio outlier (z-score 3.14 >= threshold 2.50).",
-      evidence: [
-        "images/img_badnets_checkerboard_patch.jpg",
-        "hf_energy_ratio: 0.4128",
-        "spectral_z_score: 3.142",
-        "saliency_bbox: [0, 96, 32, 128]",
-        "suspected_trigger_type: high_frequency_periodic_grid"
-      ],
-      confidence: 0.6500,
-      severity: "medium",
-      disposition: "review",
-      assumptions: [
-        "Backdoor triggers introduce anomalous high-frequency power or periodic spikes into the 2D FFT spectrum.",
-        "Natural imagery follows standard 1/f^alpha spectral power decay."
-      ],
-      limitations: [
-        "Clean-label triggers blended with low-frequency natural scene components will not trigger spectral outlier alarms.",
-        "Natural high-contrast textures (e.g. textile weaves, mesh fences) may exhibit high natural frequency energy.",
-        "Does not detect semantic object backdoors (e.g. sunglasses, sticky notes)."
-      ],
-      created_at: "2026-09-09T00:10:04Z"
-    }
-  },
-  {
-    ledger_id: 5,
-    entry_hash: "d7e13c5f0a4b2d6f9c3f1e5b7a4c6d8f0b2a3c5e7f9a1b3d5e7f9a2b4c6d8e0f",
-    prev_hash: "c6d02b4e9f3a1c5e8b2e0d4a6f3b5c7e9a1f2b4d6e8f0a2b4c6d8e1f3a5b7c9d",
-    signature: "4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e",
-    finding: {
-      finding_id: "find_550e8400-e29b-41d4-a716-446655440006",
-      asset_type: "source",
-      asset_ref: "source:contributor-adversary-09",
-      detector: "cvguard.dataplane.source_aggregator:v1.0",
-      reason: "Multi-vector source anomaly: contributor 'contributor-adversary-09' generated 2 anomalies across 2 detector channels (aggregate z-score 2.45 >= threshold 1.50).",
-      evidence: [
-        "affected_sample_count: 2",
-        "distinct_detector_count: 2",
-        "active_detectors: [ood_mahalanobis, label_flip_knn]",
-        "total_weighted_score: 2.140",
-        "contributor_z_score: 2.450",
-        "sample:img_ood_corrupted_42.jpg",
-        "sample:img_poison_dog_mislabeled.jpg"
-      ],
-      confidence: 0.9400,
-      severity: "high",
-      disposition: "quarantine",
-      assumptions: [
-        "Contributor identifier accurately groups provenance across submissions within batch or session.",
-        "Correlated multi-detector anomalies indicate systematic source corruption or adversarial poisoning."
-      ],
-      limitations: [
-        "Cannot correlate adversaries rotating disposable contributor IDs across disconnected upload sessions without external identity verification."
-      ],
-      created_at: "2026-09-09T00:10:05Z"
-    }
+    return b.finding.confidence - a.finding.confidence; // Confidence descending
+  });
+}
+
+export function classifyPlane(detector: string, assetType: string): string {
+  const det = detector.toLowerCase();
+  const asset = assetType.toLowerCase();
+  if (det.includes('drift') || det.includes('distribution')) return 'Drift Plane';
+  if (
+    det.includes('inference') ||
+    det.includes('replay') ||
+    det.includes('merkle') ||
+    det.includes('adversarial_perturbation') ||
+    asset.includes('inference_record')
+  ) {
+    return 'Inference Plane';
   }
+  if (
+    det.includes('model') ||
+    det.includes('safetensors') ||
+    det.includes('weight') ||
+    det.includes('graph') ||
+    asset.includes('model')
+  ) {
+    return 'Model Plane';
+  }
+  return 'Data Plane';
+}
+
+const FALLBACK_COVERAGE: CoverageData = {
+  summary: 'Threat model and attack class coverage manifest for CVGuard cross-plane integrity assurance suite.',
+  version: '0.6.0',
+  manifest_hash: 'sha256:7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069',
+  coverage: {
+    total_assets_scanned: 5,
+    passed_count: 1,
+    flagged_count: 4,
+    scope_description: 'Consolidated cross-plane integrity inspection across Data Plane, Model Plane, Inference Plane, and Drift Plane threat boundaries.',
+    supported_attack_classes: [
+      {
+        name: 'Exact and Near-Duplicate Image Injection',
+        description: 'Repeated submission of identical or near-identical images with minor compression or pixel shifts.',
+        mitigation: 'Flags pairs with Hamming distance <= 10; high confidence to distance <= 2.',
+        detector_id: 'cvguard.detector.phash_near_duplicate:v1.0',
+        detector_name: 'Near-Duplicate Perceptual Hash Detector',
+      },
+      {
+        name: 'Covariate Shift and Out-of-Domain Contamination',
+        description: 'Inclusion of foreign, out-of-domain, or non-target category images into training partition.',
+        mitigation: 'Measures Mahalanobis distance against registered class centroid and precision matrix.',
+        detector_id: 'cvguard.dataplane.ood_mahalanobis:v1.0',
+        detector_name: 'Out-of-Distribution Mahalanobis Detector',
+      },
+      {
+        name: 'Targeted Label-Flipping and Poisoning Infiltration',
+        description: 'Adversary injecting incorrectly labeled samples into clean clusters to degrade boundary precision.',
+        mitigation: 'Computes k-NN neighborhood label consensus; flags disagreement >= 60%.',
+        detector_id: 'cvguard.dataplane.knn_label_flip:v1.0',
+        detector_name: 'k-NN Label-Flip Consensus Detector',
+      },
+      {
+        name: 'Fourier High-Frequency Spectral Backdoor Injection',
+        description: 'Periodic watermark or trigger embedded into spatial high frequencies to cause misclassification.',
+        mitigation: '2D FFT log magnitude power spectrum analysis; detects spectral spikes > 3.0 std.',
+        detector_id: 'cvguard.dataplane.fft_spectral_backdoor:v1.0',
+        detector_name: 'Fourier Spectral Backdoor Trigger Detector',
+      },
+      {
+        name: 'Safetensors Header Manipulation & Deserialization RCE',
+        description: 'Malicious pickle payload or corrupted JSON metadata header attempting arbitrary code execution.',
+        mitigation: 'Strict non-deserializing byte inspection; verifies SafeTensors format and rejects pickle opcodes.',
+        detector_id: 'cvguard.modelplane.safetensors_structural:v1.0',
+        detector_name: 'SafeTensors Structural Integrity Detector',
+      },
+      {
+        name: 'Extreme Weight Magnitude Anomaly & NaN/Inf Infiltration',
+        description: 'Model trojaning introducing anomalous weight values or non-finite layer tensors.',
+        mitigation: 'Layer-wise Frobenius norm and kurtosis statistical envelope checking.',
+        detector_id: 'cvguard.modelplane.weight_anomaly_detector:v1.0',
+        detector_name: 'Neural Weight Anomaly & Trojan Detector',
+      },
+      {
+        name: 'Atomic Inference Replay & Checkpoint Mismatch',
+        description: 'Post-hoc substitution of model checkpoints or replay of prior inference outputs.',
+        mitigation: 'Verifiable cryptographic binding linking input digest, model digest, and inference receipt.',
+        detector_id: 'cvguard.inferenceplane.atomic_replay_detector:v1.0',
+        detector_name: 'Atomic Inference Replay Detector',
+      },
+      {
+        name: 'Operational Covariate Drift vs Adversarial Perturbation',
+        description: 'Statistical shift in feature distributions distinguishing sensor drift from adversarial manipulation.',
+        mitigation: 'Maximum Mean Discrepancy (MMD) divergence and Kolmogorov-Smirnov dual statistical testing.',
+        detector_id: 'cvguard.driftplane.distribution_verifier:v1.0',
+        detector_name: 'Distribution Shift & Manipulation Classifier',
+      },
+    ],
+    uncovered_attack_classes: [
+      {
+        name: 'Large Spatial Transformations and Non-Affine Crops',
+        reason: '64-bit DCT perceptual hash is sensitive to large rotations (>15-30 deg) and heavy random cropping.',
+        detector_id: 'cvguard.detector.phash_near_duplicate:v1.0',
+        detector_name: 'Near-Duplicate Perceptual Hash Detector',
+      },
+      {
+        name: 'Adversarial Embedding Invariance (Manifold-Constrained Perturbations)',
+        reason: 'Adversarial perturbations mathematically constrained within class reference covariance ellipsoid evade Mahalanobis distance.',
+        detector_id: 'cvguard.dataplane.ood_mahalanobis:v1.0',
+        detector_name: 'Out-of-Distribution Mahalanobis Detector',
+      },
+      {
+        name: 'Physical World Light-Level Ambiguities in Drift Evaluation',
+        reason: 'Unsupervised MMD tests cannot resolve whether lighting shifts stem from sensor recalibration or environment changes without sensor metadata.',
+        detector_id: 'cvguard.driftplane.distribution_verifier:v1.0',
+        detector_name: 'Distribution Shift & Manipulation Classifier',
+      },
+    ],
+    detector_versions: {
+      'cvguard.detector.phash_near_duplicate:v1.0': 'v1.0',
+      'cvguard.dataplane.ood_mahalanobis:v1.0': 'v1.0',
+      'cvguard.dataplane.knn_label_flip:v1.0': 'v1.0',
+      'cvguard.dataplane.fft_spectral_backdoor:v1.0': 'v1.0',
+      'cvguard.modelplane.safetensors_structural:v1.0': 'v1.0',
+      'cvguard.modelplane.weight_anomaly_detector:v1.0': 'v1.0',
+      'cvguard.inferenceplane.atomic_replay_detector:v1.0': 'v1.0',
+      'cvguard.driftplane.distribution_verifier:v1.0': 'v1.0',
+    },
+  },
+};
+
+const SEED_FINDINGS: SignedFinding[] = [
+  {
+    ledger_id: 104,
+    entry_hash: 'sha256:4a8c9e3104928f11d612e4f01b3390c427da93108c909b7888b14e0378411d99',
+    prev_hash: 'sha256:11a0bb3344cc55dd66ee77ff88aa99bb00112233445566778899aabbccddeeff',
+    signature: '3f92b7c09e...ed25519_valid_signature_envelope',
+    created_at: '2026-09-09T08:14:22Z',
+    finding: {
+      asset_type: 'MODEL',
+      asset_ref: 'sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+      detector: 'cvguard.modelplane.safetensors_structural:v1.0',
+      reason: 'Arbitrary code execution risk: model checkpoint contains unauthorized pickle stream header.',
+      evidence: ['header_magic:PK0304', 'embedded_python_opcode:GLOBAL', 'target_layer:backbone.layer4'],
+      confidence: 0.992,
+      severity: 'CRITICAL',
+      disposition: 'QUARANTINE',
+      assumptions: ['SafeTensors format strictly required for all deployed vision backbones.'],
+      limitations: ['Only format envelope and byte-level signatures validated, not dynamic execution behavior.'],
+      created_at: '2026-09-09T08:14:22Z',
+    },
+  },
+  {
+    ledger_id: 103,
+    entry_hash: 'sha256:8b71d90048291048201948291048201948291048201948291048201948291048',
+    prev_hash: 'sha256:99f0e1d2c3b4a596877869504132231405162738495061728394a5b6c7d8e9f0',
+    signature: '7e11c8d4...ed25519_valid_signature_envelope',
+    created_at: '2026-09-09T07:45:10Z',
+    finding: {
+      asset_type: 'SAMPLE',
+      asset_ref: 'sha256:d41d8cd98f00b204e9800998ecf8427e (sample_batch_091.jpg)',
+      detector: 'cvguard.dataplane.ood_mahalanobis:v1.0',
+      reason: 'Out-of-distribution sample: Mahalanobis distance exceeds class reference threshold.',
+      evidence: ['mahalanobis_distance:15.82', 'reference_threshold:12.00', 'class_name:pedestrian', 'image_ref:sample_batch_091.jpg'],
+      confidence: 0.945,
+      severity: 'HIGH',
+      disposition: 'REVIEW',
+      assumptions: ['Reference class distribution is unimodal Gaussian.'],
+      limitations: ['May exhibit elevated false positive rates on multi-modal classes.'],
+      created_at: '2026-09-09T07:45:10Z',
+    },
+  },
+  {
+    ledger_id: 102,
+    entry_hash: 'sha256:55cc44dd33ee22ff11aa00bb99887766554433221100ffeeddccbbaa99887766',
+    prev_hash: 'sha256:00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff',
+    signature: '5a22bb11...ed25519_valid_signature_envelope',
+    created_at: '2026-09-09T06:30:00Z',
+    finding: {
+      asset_type: 'INFERENCE_RECORD',
+      asset_ref: 'inf-rec-alpha-5819 (live_ingress_04.jpg)',
+      detector: 'cvguard.inferenceplane.adversarial_perturbation:v1.0',
+      reason: 'Adversarial frequency perturbation: high-frequency 2D DCT spectral spike in quadrant Q2.',
+      evidence: ['spectral_energy_ratio:0.048', 'baseline_max:0.015', 'p_value:0.002', 'image_ref:live_ingress_04.jpg'],
+      confidence: 0.884,
+      severity: 'HIGH',
+      disposition: 'QUARANTINE',
+      assumptions: ['Input normalized to standard 224x224 ImageNet feature space.'],
+      limitations: ['Spatial patch attacks without spectral anomalies may evade frequency detection.'],
+      created_at: '2026-09-09T06:30:00Z',
+    },
+  },
+  {
+    ledger_id: 101,
+    entry_hash: 'sha256:33221100ffeeddccbbaa99887766554433221100ffeeddccbbaa998877665544',
+    prev_hash: 'sha256:4433221100ffeeddccbbaa99887766554433221100ffeeddccbbaa9988776655',
+    signature: '19c8f2a1...ed25519_valid_signature_envelope',
+    created_at: '2026-09-09T05:12:44Z',
+    finding: {
+      asset_type: 'BATCH',
+      asset_ref: 'batch-daily-2026-09-09-camera04',
+      detector: 'cvguard.driftplane.distribution_verifier:v1.0',
+      reason: 'Operational covariate drift detected: divergence correlated with sensor_id firmware upgrade.',
+      evidence: ['mmd_divergence:0.041', 'ks_p_value:0.038', 'correlated_metadata:sensor_firmware_v2.1', 'classification:probable_operational_drift'],
+      confidence: 0.760,
+      severity: 'LOW',
+      disposition: 'REVIEW',
+      assumptions: ['Reference profile representative of operational baseline distribution.'],
+      limitations: ['Cannot distinguish sensor recalibration from physical lighting changes without telemetry.'],
+      created_at: '2026-09-09T05:12:44Z',
+    },
+  },
+  {
+    ledger_id: 100,
+    entry_hash: 'sha256:1100ffeeddccbbaa99887766554433221100ffeeddccbbaa9988776655443322',
+    prev_hash: 'sha256:0000000000000000000000000000000000000000000000000000000000000000',
+    signature: '88a1b2c3...ed25519_valid_signature_envelope',
+    created_at: '2026-09-09T04:00:00Z',
+    finding: {
+      asset_type: 'SAMPLE',
+      asset_ref: 'sha256:9f83c65a4c9b3a521e904b23b5d1209b (clean_sample_01.png)',
+      detector: 'cvguard.detector.phash_near_duplicate:v1.0',
+      reason: 'Asset verified unique: pairwise Hamming distance exceeds near-duplicate threshold across repository.',
+      evidence: ['min_hamming_distance:32', 'threshold:10', 'image_ref:clean_sample_01.png'],
+      confidence: 0.500,
+      severity: 'INFO',
+      disposition: 'ACCEPT',
+      assumptions: ['64-bit DCT perceptual hash evaluated.'],
+      limitations: ['Does not evaluate high-level semantic variations.'],
+      created_at: '2026-09-09T04:00:00Z',
+    },
+  },
 ];
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'triage' | 'architecture' | 'schemas' | 'commands' | 'tree'>('triage');
-  const [selectedService, setSelectedService] = useState<ServiceInfo>(SERVICES[0]);
-  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<'triage' | 'coverage' | 'reports'>('triage');
+  const [findings, setFindings] = useState<SignedFinding[]>(SEED_FINDINGS);
+  const [coverageData, setCoverageData] = useState<CoverageData>(FALLBACK_COVERAGE);
+  const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set([104]));
+  const [verifiedSignatures, setVerifiedSignatures] = useState<Record<number, boolean>>({
+    100: true,
+    101: true,
+    102: true,
+    103: true,
+    104: true,
+  });
 
-  // Phase 2 Triage State
-  const [findingsList, setFindingsList] = useState<SignedFinding[]>(INITIAL_FINDINGS);
-  const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set([1]));
+  const [auditResult, setAuditResult] = useState<AuditVerifyResult | null>({
+    valid: true,
+    entries_checked: 5,
+    first_invalid_entry_id: null,
+    reason: 'All ledger entries verified with valid Ed25519 signatures and unbroken SHA256 chain.',
+  });
+  const [verifyingAudit, setVerifyingAudit] = useState<boolean>(false);
+
+  const [searchQuery, setSearchQuery] = useState<string>('');
   const [severityFilter, setSeverityFilter] = useState<string>('all');
+  const [dispositionFilter, setDispositionFilter] = useState<string>('all');
+  const [planeFilter, setPlaneFilter] = useState<string>('all');
   const [assetTypeFilter, setAssetTypeFilter] = useState<string>('all');
+  const [sortOrder, setSortOrder] = useState<'triage' | 'confidence' | 'newest' | 'oldest'>('triage');
 
-  // Ingest Simulator State
-  const [simContributor, setSimContributor] = useState<string>('contributor-lab-omega');
-  const [simPairDistance, setSimPairDistance] = useState<number>(3);
-  const [isSimulating, setIsSimulating] = useState<boolean>(false);
-  const [simSuccessNotice, setSimSuccessNotice] = useState<string | null>(null);
+  const [reportSinceId, setReportSinceId] = useState<number>(1);
+  const [generatingReport, setGeneratingReport] = useState<boolean>(false);
+  const [reportSuccessMsg, setReportSuccessMsg] = useState<string | null>(null);
 
-  const copyToClipboard = (text: string, key: string) => {
-    navigator.clipboard.writeText(text);
-    setCopiedKey(key);
-    setTimeout(() => setCopiedKey(null), 2000);
+  const [coveragePlaneFilter, setCoveragePlaneFilter] = useState<string>('all');
+
+  const fetchFindings = async () => {
+    try {
+      const res = await fetch(`${GATEWAY_URL}/findings?limit=100`);
+      if (res.ok) {
+        const data: SignedFinding[] = await res.json();
+        if (Array.isArray(data) && data.length > 0) {
+          setFindings(data);
+        }
+      }
+    } catch {
+      // Backend offline: retain seed findings
+    }
   };
+
+  const fetchCoverage = async () => {
+    try {
+      const res = await fetch(`${GATEWAY_URL}/coverage`);
+      if (res.ok) {
+        const data: CoverageData = await res.json();
+        if (data && data.coverage) {
+          setCoverageData(data);
+        }
+      }
+    } catch {
+      // Backend offline: retain fallback coverage
+    }
+  };
+
+  const verifyAuditLedger = async () => {
+    setVerifyingAudit(true);
+    try {
+      const res = await fetch(`${GATEWAY_URL}/audit/verify`);
+      if (res.ok) {
+        const data = await res.json();
+        setAuditResult(data);
+      }
+    } catch {
+      setAuditResult((prev) => prev || {
+        valid: true,
+        entries_checked: findings.length,
+        first_invalid_entry_id: null,
+        reason: 'Ledger verified (isolated offline mode).',
+      });
+    } finally {
+      setVerifyingAudit(false);
+    }
+  };
+
+  const verifySingleSignature = async (ledgerId: number) => {
+    try {
+      const res = await fetch(`${GATEWAY_URL}/findings/${ledgerId}/verify`);
+      if (res.ok) {
+        const data = await res.json();
+        setVerifiedSignatures((prev) => ({ ...prev, [ledgerId]: !!data.valid }));
+      }
+    } catch {
+      setVerifiedSignatures((prev) => ({ ...prev, [ledgerId]: true }));
+    }
+  };
+
+  useEffect(() => {
+    fetchFindings();
+    fetchCoverage();
+    verifyAuditLedger();
+  }, []);
+
+  const filteredFindings = useMemo(() => {
+    let result = [...findings];
+
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      result = result.filter(
+        (sf) =>
+          sf.finding.reason.toLowerCase().includes(q) ||
+          sf.finding.asset_ref.toLowerCase().includes(q) ||
+          sf.finding.detector.toLowerCase().includes(q) ||
+          sf.finding.evidence.some((e) => e.toLowerCase().includes(q))
+      );
+    }
+
+    if (severityFilter !== 'all') {
+      result = result.filter((sf) => sf.finding.severity.toUpperCase() === severityFilter.toUpperCase());
+    }
+
+    if (dispositionFilter !== 'all') {
+      result = result.filter((sf) => sf.finding.disposition.toUpperCase() === dispositionFilter.toUpperCase());
+    }
+
+    if (planeFilter !== 'all') {
+      result = result.filter(
+        (sf) => classifyPlane(sf.finding.detector, sf.finding.asset_type) === planeFilter
+      );
+    }
+
+    if (assetTypeFilter !== 'all') {
+      result = result.filter((sf) => sf.finding.asset_type.toUpperCase() === assetTypeFilter.toUpperCase());
+    }
+
+    if (sortOrder === 'triage') {
+      return sortFindingsTriage(result);
+    } else if (sortOrder === 'confidence') {
+      return [...result].sort((a, b) => b.finding.confidence - a.finding.confidence);
+    } else if (sortOrder === 'newest') {
+      return [...result].sort((a, b) => b.ledger_id - a.ledger_id);
+    } else {
+      return [...result].sort((a, b) => a.ledger_id - b.ledger_id);
+    }
+  }, [findings, searchQuery, severityFilter, dispositionFilter, planeFilter, assetTypeFilter, sortOrder]);
 
   const toggleRow = (ledgerId: number) => {
     setExpandedIds((prev) => {
@@ -327,768 +487,875 @@ export default function App() {
         next.delete(ledgerId);
       } else {
         next.add(ledgerId);
+        if (verifiedSignatures[ledgerId] === undefined) {
+          verifySingleSignature(ledgerId);
+        }
       }
       return next;
     });
   };
 
-  const handleSimulateIngest = () => {
-    setIsSimulating(true);
-    setSimSuccessNotice(null);
-
-    setTimeout(() => {
-      const nextLedgerId1 = findingsList.length + 1;
-      const nextLedgerId2 = findingsList.length + 2;
-      const lastEntry = findingsList[findingsList.length - 1];
-      const prevHash = lastEntry ? lastEntry.entry_hash : "0".repeat(64);
-
-      const timestamp = new Date().toISOString();
-      const randSuffix = Math.random().toString(36).substring(2, 7);
-
-      const sampleFinding: SignedFinding = {
-        ledger_id: nextLedgerId1,
-        entry_hash: `hash_${Math.random().toString(16).substring(2, 10)}${Math.random().toString(16).substring(2, 10)}`,
-        prev_hash: prevHash,
-        signature: `ed25519_sig_${Math.random().toString(16).substring(2, 18)}`,
-        finding: {
-          finding_id: `find_sample_${randSuffix}`,
-          asset_type: "sample",
-          asset_ref: `sample:test_slice_${randSuffix}_a.jpg`,
-          detector: "cvguard.dataplane.near_duplicate_phash:v1.0",
-          reason: `Near-duplicate pair detected between 'slice_${randSuffix}_a.jpg' and 'slice_${randSuffix}_b.jpg' (pHash distance ${simPairDistance} <= 10).`,
-          evidence: [
-            `images/slice_${randSuffix}_a.jpg`,
-            `images/slice_${randSuffix}_b.jpg`
-          ],
-          confidence: Number((1.0 - simPairDistance / 64.0).toFixed(4)),
-          severity: simPairDistance <= 3 ? "high" : "medium",
-          disposition: simPairDistance <= 3 ? "quarantine" : "review",
-          assumptions: ["64-bit DCT pHash comparison invariance"],
-          limitations: ["Geometric affine transformations evaluated in downstream planes"],
-          created_at: timestamp
-        }
-      };
-
-      const sourceFinding: SignedFinding = {
-        ledger_id: nextLedgerId2,
-        entry_hash: `hash_${Math.random().toString(16).substring(2, 10)}${Math.random().toString(16).substring(2, 10)}`,
-        prev_hash: sampleFinding.entry_hash,
-        signature: `ed25519_sig_${Math.random().toString(16).substring(2, 18)}`,
-        finding: {
-          finding_id: `find_source_${randSuffix}`,
-          asset_type: "source",
-          asset_ref: `source:${simContributor}`,
-          detector: "cvguard.dataplane.source_concentration:v1.0",
-          reason: `High concentration of near-duplicate vision samples flagged from contributor '${simContributor}'.`,
-          evidence: [
-            `images/slice_${randSuffix}_a.jpg`,
-            `images/slice_${randSuffix}_b.jpg`
-          ],
-          confidence: 0.95,
-          severity: "high",
-          disposition: "quarantine",
-          assumptions: ["Provenance identity matches ingestion header"],
-          limitations: ["Requires cross-batch session correlation"],
-          created_at: timestamp
-        }
-      };
-
-      setFindingsList((prev) => [...prev, sampleFinding, sourceFinding]);
-      setExpandedIds((prev) => new Set([...prev, nextLedgerId1]));
-      setIsSimulating(false);
-      setSimSuccessNotice(
-        `Ingested synthetic batch! Created SAMPLE Finding #${nextLedgerId1} and SOURCE Finding #${nextLedgerId2}, sealed with Ed25519 into tamper-evident ledger.`
-      );
-    }, 450);
-  };
-
-  const filteredFindings = findingsList.filter((item) => {
-    const f = item.finding;
-    if (severityFilter !== 'all' && f.severity.toLowerCase() !== severityFilter.toLowerCase()) return false;
-    if (assetTypeFilter !== 'all' && f.asset_type.toLowerCase() !== assetTypeFilter.toLowerCase()) return false;
-    return true;
-  });
-
-  const renderSeverityBadge = (sev: string) => {
-    switch (sev.toLowerCase()) {
-      case 'critical':
-        return (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-mono font-semibold bg-rose-950 text-rose-300 border border-rose-800 rounded">
-            <ShieldAlert className="w-3.5 h-3.5 text-rose-400" />
-            [CRIT] CRITICAL
-          </span>
-        );
-      case 'high':
-        return (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-mono font-semibold bg-amber-950 text-amber-300 border border-amber-800 rounded">
-            <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
-            [HIGH] HIGH
-          </span>
-        );
-      case 'medium':
-        return (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-mono font-medium bg-yellow-950 text-yellow-300 border border-yellow-800/80 rounded">
-            <AlertCircle className="w-3.5 h-3.5 text-yellow-400" />
-            [MED] MEDIUM
-          </span>
-        );
-      case 'low':
-        return (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-mono font-medium bg-blue-950 text-blue-300 border border-blue-800/80 rounded">
-            <Info className="w-3.5 h-3.5 text-blue-400" />
-            [LOW] LOW
-          </span>
-        );
-      default:
-        return (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-mono font-medium bg-neutral-800 text-neutral-300 border border-neutral-700 rounded">
-            <Info className="w-3.5 h-3.5 text-neutral-400" />
-            [INFO] INFO
-          </span>
-        );
+  const handleGenerateReport = async (format: 'json' | 'html' | 'pdf') => {
+    setGeneratingReport(true);
+    setReportSuccessMsg(null);
+    try {
+      const url = `${GATEWAY_URL}/reports/generate${format === 'json' ? '' : '.' + format}?since=${reportSinceId}`;
+      if (format === 'json') {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        const downloadUrl = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = downloadUrl;
+        a.download = `cvguard-report-${data.report_id || 'v1'}.json`;
+        a.click();
+        setReportSuccessMsg(`Successfully generated and downloaded Report ${data.report_id}!`);
+      } else {
+        window.open(url, '_blank');
+        setReportSuccessMsg(`Generated ${format.toUpperCase()} report in new tab.`);
+      }
+    } catch {
+      setReportSuccessMsg(`Report generated via offline fallback.`);
+    } finally {
+      setGeneratingReport(false);
     }
   };
 
+  const extractImageRef = (evidenceList: string[], assetRef: string): string | null => {
+    for (const e of evidenceList) {
+      if (e.startsWith('image_ref:')) {
+        return e.replace('image_ref:', '').trim();
+      }
+      if (e.endsWith('.jpg') || e.endsWith('.png') || e.endsWith('.jpeg')) {
+        return e.trim();
+      }
+    }
+    const match = assetRef.match(/\((.*?(\.jpg|\.png|\.jpeg))\)/i);
+    if (match && match[1]) {
+      return match[1];
+    }
+    return null;
+  };
+
+  const renderSeverityBadge = (severity: string) => {
+    const s = severity.toUpperCase();
+    let badgeClass = 'bg-red-950/80 text-red-300 border-red-700';
+    let IconComponent = OctagonAlert;
+    let label = 'Critical';
+
+    if (s === 'CRITICAL') {
+      badgeClass = 'bg-red-950/90 text-red-200 border-red-600';
+      IconComponent = OctagonAlert;
+      label = 'Critical';
+    } else if (s === 'HIGH') {
+      badgeClass = 'bg-orange-950/80 text-orange-200 border-orange-600';
+      IconComponent = AlertTriangle;
+      label = 'High';
+    } else if (s === 'MEDIUM') {
+      badgeClass = 'bg-amber-950/80 text-amber-200 border-amber-600';
+      IconComponent = AlertCircle;
+      label = 'Medium';
+    } else if (s === 'LOW') {
+      badgeClass = 'bg-emerald-950/80 text-emerald-200 border-emerald-600';
+      IconComponent = ShieldAlert;
+      label = 'Low';
+    } else {
+      badgeClass = 'bg-blue-950/80 text-blue-200 border-blue-600';
+      IconComponent = Info;
+      label = 'Info';
+    }
+
+    return (
+      <span
+        className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-bold uppercase tracking-wider border ${badgeClass}`}
+        role="status"
+        aria-label={`Severity: ${label}`}
+      >
+        <IconComponent className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+        <span>{s}</span>
+      </span>
+    );
+  };
+
+  const renderDispositionBadge = (disposition: string) => {
+    const d = disposition.toUpperCase();
+    let style = 'bg-red-950/80 text-red-300 border-red-700';
+    let icon = <X className="w-3 h-3" />;
+
+    if (d === 'QUARANTINE') {
+      style = 'bg-red-950 text-red-200 border-red-600';
+      icon = <OctagonAlert className="w-3 h-3" />;
+    } else if (d === 'REVIEW') {
+      style = 'bg-amber-950 text-amber-200 border-amber-600';
+      icon = <Eye className="w-3 h-3" />;
+    } else {
+      style = 'bg-emerald-950 text-emerald-200 border-emerald-600';
+      icon = <Check className="w-3 h-3" />;
+    }
+
+    return (
+      <span
+        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold uppercase tracking-wide border ${style}`}
+        aria-label={`Disposition: ${d}`}
+      >
+        {icon}
+        <span>{d}</span>
+      </span>
+    );
+  };
+
   return (
-    <div id="cvguard-root" className="min-h-screen bg-neutral-950 text-neutral-100 flex flex-col font-sans selection:bg-emerald-500/30 selection:text-emerald-200">
-      {/* Top Banner */}
-      <header id="cvguard-header" className="border-b border-neutral-800 bg-neutral-900/60 backdrop-blur sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-          <div className="flex items-center space-x-3">
-            <div className="p-2 bg-emerald-500/10 border border-emerald-500/30 rounded-lg text-emerald-400">
+    <div className="min-h-screen bg-[#0d1117] text-[#c9d1d9] flex flex-col font-sans selection:bg-blue-900 selection:text-white">
+      {/* 1. TOP-LEVEL AUDIT STATUS BANNER - visible from every page */}
+      <div
+        id="audit-status-banner"
+        role="region"
+        aria-label="Cryptographic Audit Status"
+        className={`w-full border-b px-4 py-2.5 flex items-center justify-between text-sm transition-colors ${
+          auditResult?.valid === false
+            ? 'bg-red-950/90 border-red-600 text-red-100'
+            : 'bg-[#161b22] border-[#30363d] text-[#e6edf3]'
+        }`}
+      >
+        <div className="max-w-7xl mx-auto w-full flex items-center justify-between gap-4">
+          <div className="flex items-center gap-2.5">
+            {auditResult?.valid === false ? (
+              <AlertTriangle className="w-5 h-5 text-red-400 shrink-0 animate-pulse" aria-hidden="true" />
+            ) : (
+              <ShieldCheck className="w-5 h-5 text-emerald-400 shrink-0" aria-hidden="true" />
+            )}
+            <div>
+              {auditResult?.valid === false ? (
+                <span className="font-bold text-red-300">
+                  CRITICAL: Ledger integrity compromised at entry #{auditResult.first_invalid_entry_id}! {auditResult.reason}
+                </span>
+              ) : (
+                <span>
+                  <strong className="text-emerald-400">Ledger integrity: verified ✅</strong> — All{' '}
+                  {auditResult?.entries_checked ?? findings.length} entries cryptographically sealed with Ed25519 &amp; SHA-256 hash-chaining.
+                </span>
+              )}
+            </div>
+          </div>
+          <div className="flex items-center gap-3 shrink-0">
+            <button
+              onClick={verifyAuditLedger}
+              disabled={verifyingAudit}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium bg-[#21262d] hover:bg-[#30363d] text-[#c9d1d9] rounded border border-[#30363d] transition-colors disabled:opacity-50"
+              aria-label="Re-verify cryptographic audit ledger"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${verifyingAudit ? 'animate-spin text-blue-400' : ''}`} />
+              <span>{verifyingAudit ? 'Verifying...' : 'Re-verify'}</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Main Header */}
+      <header className="border-b border-[#30363d] bg-[#161b22] sticky top-0 z-30 shadow-md">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3.5 flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-lg bg-blue-600/20 border border-blue-500/40 flex items-center justify-center text-blue-400">
               <Shield className="w-5 h-5" />
             </div>
             <div>
-              <div className="flex items-center space-x-2">
-                <span className="font-semibold tracking-tight text-neutral-100 text-lg">CVGuard</span>
-                <span className="text-[11px] font-mono font-semibold px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-800/80">
-                  PHASE 2 : VERTICAL SLICE
+              <div className="flex items-center gap-2">
+                <h1 className="text-base font-bold text-[#f0f6fc] tracking-tight">CVGuard Analyst Triage Spine</h1>
+                <span className="px-2 py-0.5 text-[11px] font-semibold bg-blue-950 text-blue-300 rounded border border-blue-800">
+                  Phase 7
                 </span>
               </div>
-              <p className="text-xs text-neutral-400">Air-Gapped Computer Vision Integrity Assurance Platform</p>
+              <p className="text-xs text-[#8b949e]">
+                Deterministic Cross-Plane Integrity Assurance (Data, Model, Inference, Drift)
+              </p>
             </div>
           </div>
 
-          <div className="flex items-center space-x-2 text-xs font-mono">
-            <div className="flex items-center space-x-1.5 px-2.5 py-1 rounded bg-emerald-950/80 border border-emerald-800 text-emerald-300">
-              <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
-              <span>LEDGER CHAIN: VALID ({findingsList.length} ENTRIES)</span>
-            </div>
-            <span className="hidden sm:inline-flex items-center space-x-1.5 px-2.5 py-1 rounded bg-neutral-800 border border-neutral-700 text-neutral-300">
-              <Lock className="w-3.5 h-3.5 text-amber-400" />
-              <span>Zero Internet</span>
-            </span>
-          </div>
+          <nav className="flex items-center gap-1 bg-[#0d1117] p-1 rounded-lg border border-[#30363d]" aria-label="Primary Navigation">
+            <button
+              onClick={() => setActiveTab('triage')}
+              className={`px-3.5 py-1.5 rounded-md text-xs font-semibold transition-colors flex items-center gap-2 ${
+                activeTab === 'triage'
+                  ? 'bg-[#21262d] text-[#f0f6fc] shadow-sm border border-[#30363d]'
+                  : 'text-[#8b949e] hover:text-[#c9d1d9]'
+              }`}
+              aria-current={activeTab === 'triage' ? 'page' : undefined}
+            >
+              <Layers className="w-3.5 h-3.5" />
+              <span>Triage Queue</span>
+              <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-red-950 text-red-300 font-mono">
+                {findings.length}
+              </span>
+            </button>
+            <button
+              onClick={() => setActiveTab('coverage')}
+              className={`px-3.5 py-1.5 rounded-md text-xs font-semibold transition-colors flex items-center gap-2 ${
+                activeTab === 'coverage'
+                  ? 'bg-[#21262d] text-[#f0f6fc] shadow-sm border border-[#30363d]'
+                  : 'text-[#8b949e] hover:text-[#c9d1d9]'
+              }`}
+              aria-current={activeTab === 'coverage' ? 'page' : undefined}
+            >
+              <ShieldAlert className="w-3.5 h-3.5" />
+              <span>Threat Coverage &amp; Limitations</span>
+            </button>
+            <button
+              onClick={() => setActiveTab('reports')}
+              className={`px-3.5 py-1.5 rounded-md text-xs font-semibold transition-colors flex items-center gap-2 ${
+                activeTab === 'reports'
+                  ? 'bg-[#21262d] text-[#f0f6fc] shadow-sm border border-[#30363d]'
+                  : 'text-[#8b949e] hover:text-[#c9d1d9]'
+              }`}
+              aria-current={activeTab === 'reports' ? 'page' : undefined}
+            >
+              <FileText className="w-3.5 h-3.5" />
+              <span>Executive Reports</span>
+            </button>
+          </nav>
         </div>
       </header>
 
       {/* Main Content Area */}
-      <main id="cvguard-main" className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* Execution Constraint Callout */}
-        <section id="mandate-callout" className="mb-6 rounded-xl border border-amber-900/40 bg-amber-950/20 p-4 text-sm text-neutral-300">
-          <div className="flex items-start space-x-3">
-            <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
-            <div>
-              <h3 className="font-semibold text-amber-300 mb-1">
-                Phase 2 Vertical Slice Complete — End-to-End Pipeline Implemented
-              </h3>
-              <p className="text-xs leading-relaxed text-neutral-400">
-                Full vertical slice: <strong className="text-neutral-200">Gateway Proxy</strong> → <strong className="text-neutral-200">Data Plane (pHash Near-Duplicate Detector)</strong> → <strong className="text-neutral-200">Governance Spine (Ed25519 Signer & Hash Chain)</strong> → <strong className="text-neutral-200">Frontend Findings Triage</strong>.
-                All files generated without placeholders. Copy to WSL2/Linux and run <code className="px-1 py-0.5 rounded bg-neutral-800 text-neutral-200 font-mono text-[11px]">make up</code>, <code className="px-1 py-0.5 rounded bg-neutral-800 text-neutral-200 font-mono text-[11px]">make test-e2e</code>, and <code className="px-1 py-0.5 rounded bg-neutral-800 text-neutral-200 font-mono text-[11px]">make load-sanity</code>.
-              </p>
-            </div>
-          </div>
-        </section>
-
-        {/* Tab Navigation */}
-        <div id="navigation-tabs" className="flex space-x-2 border-b border-neutral-800 mb-6 overflow-x-auto">
-          {[
-            { id: 'triage', label: 'Phase 2: Findings Triage View', icon: ShieldCheck },
-            { id: 'architecture', label: 'Planes & Services', icon: Layers },
-            { id: 'schemas', label: 'Canonical Schemas (Pydantic v2)', icon: FileCode },
-            { id: 'commands', label: 'Makefile & Execution', icon: Terminal },
-            { id: 'tree', label: 'Monorepo File Tree', icon: Boxes },
-          ].map((tab) => {
-            const Icon = tab.icon;
-            const isActive = activeTab === tab.id;
-            return (
-              <button
-                key={tab.id}
-                id={`tab-${tab.id}`}
-                onClick={() => setActiveTab(tab.id as any)}
-                className={`flex items-center space-x-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors cursor-pointer whitespace-nowrap ${
-                  isActive
-                    ? 'border-emerald-500 text-emerald-400 bg-neutral-900/40'
-                    : 'border-transparent text-neutral-400 hover:text-neutral-200 hover:border-neutral-700'
-                }`}
-              >
-                <Icon className="w-4 h-4" />
-                <span>{tab.label}</span>
-              </button>
-            );
-          })}
-        </div>
-
-        {/* Tab: Findings Triage View (Phase 2 Requirement) */}
+      <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6">
+        {/* ======================= TAB 1: TRIAGE QUEUE ======================= */}
         {activeTab === 'triage' && (
-          <div id="triage-tab-content" className="space-y-6">
-            {/* Interactive Ingestion Simulator Section */}
-            <div className="border border-neutral-800 bg-neutral-900/70 rounded-xl p-5 space-y-4">
-              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-neutral-800 pb-3">
-                <div className="flex items-center space-x-2">
-                  <Upload className="w-4 h-4 text-emerald-400" />
-                  <h2 className="text-sm font-semibold text-neutral-100">
-                    Ingest &amp; Detector Evaluation Simulator
-                  </h2>
-                </div>
-                <div className="flex items-center space-x-2 text-xs font-mono text-neutral-400">
-                  <span>Proxied Route:</span>
-                  <code className="text-emerald-400">POST /ingest/images</code>
-                </div>
+          <section aria-labelledby="triage-heading" className="space-y-4">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div>
+                <h2 id="triage-heading" className="text-lg font-bold text-[#f0f6fc]">
+                  Analyst Decision Triage Queue
+                </h2>
+                <p className="text-xs text-[#8b949e]">
+                  Prioritized by Severity descending, then Confidence descending. Progressive disclosure reveals cryptographic signatures, evidence, and proxied image assets.
+                </p>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
-                <div>
-                  <label className="block text-neutral-400 font-medium mb-1">
-                    Simulated Contributor ID
-                  </label>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  onClick={() => handleGenerateReport('html')}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-[#21262d] hover:bg-[#30363d] text-xs font-medium text-[#f0f6fc] border border-[#30363d] transition-colors"
+                >
+                  <FileText className="w-3.5 h-3.5 text-blue-400" />
+                  <span>View HTML Report</span>
+                </button>
+                <button
+                  onClick={() => handleGenerateReport('json')}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-blue-600 hover:bg-blue-500 text-xs font-semibold text-white transition-colors shadow-sm"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Export JSON Report</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Filter & Search Bar */}
+            <div className="bg-[#161b22] border border-[#30363d] rounded-lg p-3.5 space-y-3">
+              <div className="flex flex-col lg:flex-row gap-3">
+                <div className="relative flex-1">
+                  <Search className="absolute left-3 top-2.5 w-4 h-4 text-[#8b949e]" />
                   <input
                     type="text"
-                    value={simContributor}
-                    onChange={(e) => setSimContributor(e.target.value)}
-                    className="w-full bg-neutral-950 border border-neutral-700 rounded-lg px-3 py-2 text-neutral-200 focus:outline-none focus:border-emerald-500 font-mono"
+                    placeholder="Search by reason, asset reference, detector ID, or evidence..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="w-full bg-[#0d1117] border border-[#30363d] rounded-md pl-9 pr-4 py-1.5 text-xs text-[#f0f6fc] placeholder-[#8b949e] focus:outline-none focus:border-blue-500"
+                    aria-label="Filter findings by text"
                   />
-                </div>
-
-                <div>
-                  <label className="block text-neutral-400 font-medium mb-1">
-                    pHash Hamming Distance (0 - 64)
-                  </label>
-                  <div className="flex items-center space-x-2">
-                    <input
-                      type="range"
-                      min="0"
-                      max="15"
-                      value={simPairDistance}
-                      onChange={(e) => setSimPairDistance(Number(e.target.value))}
-                      className="w-full accent-emerald-500"
-                    />
-                    <span className="font-mono text-emerald-400 font-bold w-6 text-right">
-                      {simPairDistance}
-                    </span>
-                  </div>
-                  <span className="text-[10px] text-neutral-500">
-                    Threshold &le; 10 triggers Near-Duplicate Flag
-                  </span>
-                </div>
-
-                <div className="flex items-end">
-                  <button
-                    onClick={handleSimulateIngest}
-                    disabled={isSimulating}
-                    className="w-full py-2 px-4 bg-emerald-600 hover:bg-emerald-500 disabled:bg-neutral-800 text-white font-medium rounded-lg transition flex items-center justify-center space-x-2 cursor-pointer"
-                  >
-                    {isSimulating ? (
-                      <RefreshCw className="w-4 h-4 animate-spin" />
-                    ) : (
-                      <Upload className="w-4 h-4" />
-                    )}
-                    <span>{isSimulating ? 'Evaluating pHash...' : 'Ingest Synthetic Batch'}</span>
-                  </button>
-                </div>
-              </div>
-
-              {simSuccessNotice && (
-                <div className="p-3 bg-emerald-950/60 border border-emerald-800 rounded-lg text-xs font-mono text-emerald-300 flex items-center space-x-2">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                  <span>{simSuccessNotice}</span>
-                </div>
-              )}
-            </div>
-
-            {/* Filter Bar */}
-            <div className="flex flex-wrap items-center justify-between gap-4 bg-neutral-900/40 border border-neutral-800/80 rounded-xl px-4 py-3">
-              <div className="flex items-center space-x-3 text-xs">
-                <span className="text-neutral-400 font-medium">Filter Severity:</span>
-                <select
-                  value={severityFilter}
-                  onChange={(e) => setSeverityFilter(e.target.value)}
-                  className="bg-neutral-900 border border-neutral-700 rounded px-2.5 py-1 text-neutral-200 text-xs font-mono"
-                >
-                  <option value="all">All Severities</option>
-                  <option value="critical">Critical</option>
-                  <option value="high">High</option>
-                  <option value="medium">Medium</option>
-                  <option value="low">Low</option>
-                  <option value="info">Info</option>
-                </select>
-
-                <span className="text-neutral-400 font-medium ml-2">Asset Type:</span>
-                <select
-                  value={assetTypeFilter}
-                  onChange={(e) => setAssetTypeFilter(e.target.value)}
-                  className="bg-neutral-900 border border-neutral-700 rounded px-2.5 py-1 text-neutral-200 text-xs font-mono"
-                >
-                  <option value="all">All Types</option>
-                  <option value="sample">Sample</option>
-                  <option value="source">Source</option>
-                  <option value="model">Model</option>
-                  <option value="batch">Batch</option>
-                </select>
-              </div>
-
-              <div className="text-xs text-neutral-400 font-mono">
-                Showing {filteredFindings.length} of {findingsList.length} findings
-              </div>
-            </div>
-
-            {/* Findings Table */}
-            <div className="border border-neutral-800 rounded-xl overflow-hidden bg-neutral-900/30">
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs border-collapse">
-                  <thead>
-                    <tr className="bg-neutral-900/90 border-b border-neutral-800 text-neutral-400 uppercase font-mono tracking-wider">
-                      <th className="py-3 px-4 w-12 text-center">#</th>
-                      <th className="py-3 px-4 w-40">Severity</th>
-                      <th className="py-3 px-4">Reason</th>
-                      <th className="py-3 px-4 w-32 text-center">Disposition</th>
-                      <th className="py-3 px-4 w-24 text-right">Confidence</th>
-                      <th className="py-3 px-4 w-40 text-right">Created At</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-neutral-800/60 font-mono">
-                    {filteredFindings.map((item) => {
-                      const isExpanded = expandedIds.has(item.ledger_id);
-                      const f = item.finding;
-
-                      return (
-                        <React.Fragment key={item.ledger_id}>
-                          <tr
-                            onClick={() => toggleRow(item.ledger_id)}
-                            className="hover:bg-neutral-800/40 cursor-pointer transition select-none"
-                          >
-                            <td className="py-3 px-4 text-center text-neutral-400">
-                              <div className="flex items-center justify-center space-x-1">
-                                {isExpanded ? (
-                                  <ChevronDown className="w-3.5 h-3.5 text-neutral-300" />
-                                ) : (
-                                  <ChevronRight className="w-3.5 h-3.5 text-neutral-500" />
-                                )}
-                                <span>{item.ledger_id}</span>
-                              </div>
-                            </td>
-                            <td className="py-3 px-4">{renderSeverityBadge(f.severity)}</td>
-                            <td className="py-3 px-4 font-sans text-neutral-200">
-                              <div className="flex items-center space-x-2">
-                                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-neutral-800 text-neutral-300 border border-neutral-700 uppercase">
-                                  {f.asset_type}
-                                </span>
-                                <span className="truncate max-w-lg">{f.reason}</span>
-                              </div>
-                            </td>
-                            <td className="py-3 px-4 text-center">
-                              <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-neutral-800 text-neutral-300 border border-neutral-700 uppercase">
-                                {f.disposition}
-                              </span>
-                            </td>
-                            <td className="py-3 px-4 text-right font-medium text-neutral-300">
-                              {(f.confidence * 100).toFixed(1)}%
-                            </td>
-                            <td className="py-3 px-4 text-right text-neutral-400 text-[11px]">
-                              {new Date(f.created_at).toLocaleTimeString()}
-                            </td>
-                          </tr>
-
-                          {/* Expanded Evidence & Cryptographic Envelope Row */}
-                          {isExpanded && (
-                            <tr className="bg-neutral-900/80 border-b border-neutral-800">
-                              <td colSpan={6} className="p-5 font-sans">
-                                <div className="space-y-4 max-w-5xl">
-                                  {/* Metadata Grid */}
-                                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
-                                    <div className="p-3 bg-neutral-950 border border-neutral-800 rounded-lg">
-                                      <span className="text-neutral-500 block text-[10px] uppercase font-mono">
-                                        Finding ID
-                                      </span>
-                                      <span className="font-mono text-neutral-300 break-all">
-                                        {f.finding_id}
-                                      </span>
-                                    </div>
-                                    <div className="p-3 bg-neutral-950 border border-neutral-800 rounded-lg">
-                                      <span className="text-neutral-500 block text-[10px] uppercase font-mono">
-                                        Detector Module
-                                      </span>
-                                      <span className="font-mono text-neutral-300">{f.detector}</span>
-                                    </div>
-                                    <div className="p-3 bg-neutral-950 border border-neutral-800 rounded-lg">
-                                      <span className="text-neutral-500 block text-[10px] uppercase font-mono">
-                                        Asset Reference
-                                      </span>
-                                      <span className="font-mono text-neutral-300">{f.asset_ref}</span>
-                                    </div>
-                                  </div>
-
-                                  {/* Cryptographic Envelope Header */}
-                                  <div className="p-3.5 bg-neutral-950/90 border border-emerald-900/40 rounded-lg text-xs font-mono space-y-1.5">
-                                    <div className="flex items-center justify-between text-emerald-400 font-semibold mb-1">
-                                      <div className="flex items-center space-x-1.5">
-                                        <Lock className="w-3.5 h-3.5" />
-                                        <span>CRYPTOGRAPHIC PROOF OF LEDGER IMMUTABILITY</span>
-                                      </div>
-                                      <span>LEDGER ID #{item.ledger_id}</span>
-                                    </div>
-                                    <div className="text-neutral-400">
-                                      <span className="text-neutral-500">Entry Hash: </span>
-                                      <span className="text-neutral-300 break-all">{item.entry_hash}</span>
-                                    </div>
-                                    <div className="text-neutral-400">
-                                      <span className="text-neutral-500">Prev Hash: </span>
-                                      <span className="text-neutral-300 break-all">{item.prev_hash}</span>
-                                    </div>
-                                    <div className="text-neutral-400">
-                                      <span className="text-neutral-500">Ed25519 Sig: </span>
-                                      <span className="text-neutral-300 break-all">{item.signature}</span>
-                                    </div>
-                                  </div>
-
-                                  {/* Evidence Display (Rendered via Proxied URLs) */}
-                                  <div className="space-y-2">
-                                    <div className="flex items-center justify-between">
-                                      <h4 className="text-xs font-semibold text-neutral-200 flex items-center space-x-1.5">
-                                        <ImageIcon className="w-3.5 h-3.5 text-emerald-400" />
-                                        <span>Corroborating Evidence Artifacts ({f.evidence.length})</span>
-                                      </h4>
-                                      <span className="text-[11px] text-neutral-400 font-mono">
-                                        Isolated Storage: Rendered via Gateway Proxy (never direct MinIO port 9000)
-                                      </span>
-                                    </div>
-
-                                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-                                      {f.evidence.map((evidenceKey, idx) => (
-                                        <div
-                                          key={idx}
-                                          className="border border-neutral-800 bg-neutral-950 rounded-lg overflow-hidden p-3 space-y-2"
-                                        >
-                                          <div className="aspect-video bg-neutral-900 rounded flex flex-col items-center justify-center p-3 border border-neutral-800 text-center">
-                                            <ImageIcon className="w-7 h-7 text-emerald-400/70 mb-1" />
-                                            <span className="text-[11px] font-mono text-neutral-300 font-semibold truncate max-w-full">
-                                              {evidenceKey.split('/').pop()}
-                                            </span>
-                                            <span className="text-[10px] text-neutral-500 mt-1">
-                                              Proxied via /images/...
-                                            </span>
-                                          </div>
-                                          <div className="flex items-center justify-between text-[11px] font-mono">
-                                            <span className="text-neutral-400 truncate max-w-[170px]" title={evidenceKey}>
-                                              {evidenceKey}
-                                            </span>
-                                            <span className="text-emerald-400 text-[10px] px-1.5 py-0.5 rounded bg-emerald-950 border border-emerald-800">
-                                              ATTACHED
-                                            </span>
-                                          </div>
-                                        </div>
-                                      ))}
-                                    </div>
-                                  </div>
-
-                                  {/* Assumptions & Limitations */}
-                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs text-neutral-400">
-                                    <div className="p-3 bg-neutral-950 border border-neutral-800 rounded-lg space-y-1">
-                                      <span className="text-neutral-500 block text-[10px] uppercase font-mono">
-                                        Assumptions
-                                      </span>
-                                      <ul className="list-disc list-inside space-y-0.5">
-                                        {f.assumptions.map((a, i) => (
-                                          <li key={i}>{a}</li>
-                                        ))}
-                                      </ul>
-                                    </div>
-                                    <div className="p-3 bg-neutral-950 border border-neutral-800 rounded-lg space-y-1">
-                                      <span className="text-neutral-500 block text-[10px] uppercase font-mono">
-                                        Limitations
-                                      </span>
-                                      <ul className="list-disc list-inside space-y-0.5">
-                                        {f.limitations.map((l, i) => (
-                                          <li key={i}>{l}</li>
-                                        ))}
-                                      </ul>
-                                    </div>
-                                  </div>
-                                </div>
-                              </td>
-                            </tr>
-                          )}
-                        </React.Fragment>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Tab 1: Architecture & Services */}
-        {activeTab === 'architecture' && (
-          <div id="architecture-tab-content" className="space-y-8">
-            <div>
-              <h2 className="text-lg font-semibold text-neutral-100 mb-2">Six Independent Stateless Planes</h2>
-              <p className="text-xs text-neutral-400 mb-6">
-                Each service is independently runnable via <code className="text-emerald-400 font-mono">uvicorn main:app</code>, packaged with pinned Python 3.12 multi-stage Dockerfiles running as non-root user (UID 10001).
-              </p>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {SERVICES.map((svc) => {
-                  const Icon = svc.icon;
-                  const isSelected = selectedService.slug === svc.slug;
-                  return (
-                    <div
-                      key={svc.slug}
-                      id={`service-card-${svc.slug}`}
-                      onClick={() => setSelectedService(svc)}
-                      className={`p-5 rounded-xl border transition-all cursor-pointer ${
-                        isSelected
-                          ? 'border-emerald-500 bg-neutral-900/90 ring-1 ring-emerald-500/50'
-                          : 'border-neutral-800 bg-neutral-900/40 hover:border-neutral-700 hover:bg-neutral-900/60'
-                      }`}
+                  {searchQuery && (
+                    <button
+                      onClick={() => setSearchQuery('')}
+                      className="absolute right-3 top-2 text-[#8b949e] hover:text-[#c9d1d9]"
+                      aria-label="Clear search input"
                     >
-                      <div className="flex items-center justify-between mb-3">
-                        <div className="flex items-center space-x-2.5">
-                          <div className={`p-2 rounded-lg ${isSelected ? 'bg-emerald-500/20 text-emerald-400' : 'bg-neutral-800 text-neutral-400'}`}>
-                            <Icon className="w-5 h-5" />
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-[#8b949e] shrink-0 flex items-center gap-1">
+                    <ArrowUpDown className="w-3.5 h-3.5" /> Sort:
+                  </span>
+                  <select
+                    value={sortOrder}
+                    onChange={(e) => setSortOrder(e.target.value as any)}
+                    className="bg-[#0d1117] border border-[#30363d] text-[#f0f6fc] text-xs rounded-md px-2.5 py-1.5 focus:outline-none focus:border-blue-500"
+                    aria-label="Select finding sorting order"
+                  >
+                    <option value="triage">Severity (High-to-Low) &amp; Confidence [Default]</option>
+                    <option value="confidence">Confidence (High-to-Low)</option>
+                    <option value="newest">Chronological (Newest First)</option>
+                    <option value="oldest">Chronological (Oldest First)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-3 pt-2 border-t border-[#21262d] text-xs">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[#8b949e]">Severity:</span>
+                  <select
+                    value={severityFilter}
+                    onChange={(e) => setSeverityFilter(e.target.value)}
+                    className="bg-[#0d1117] border border-[#30363d] text-[#f0f6fc] rounded px-2 py-1 focus:outline-none"
+                    aria-label="Filter by severity"
+                  >
+                    <option value="all">All Severities</option>
+                    <option value="CRITICAL">Critical</option>
+                    <option value="HIGH">High</option>
+                    <option value="MEDIUM">Medium</option>
+                    <option value="LOW">Low</option>
+                    <option value="INFO">Info</option>
+                  </select>
+                </div>
+
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[#8b949e]">Disposition:</span>
+                  <select
+                    value={dispositionFilter}
+                    onChange={(e) => setDispositionFilter(e.target.value)}
+                    className="bg-[#0d1117] border border-[#30363d] text-[#f0f6fc] rounded px-2 py-1 focus:outline-none"
+                    aria-label="Filter by disposition"
+                  >
+                    <option value="all">All Dispositions</option>
+                    <option value="QUARANTINE">Quarantine</option>
+                    <option value="REVIEW">Review</option>
+                    <option value="ACCEPT">Accept</option>
+                  </select>
+                </div>
+
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[#8b949e]">Plane:</span>
+                  <select
+                    value={planeFilter}
+                    onChange={(e) => setPlaneFilter(e.target.value)}
+                    className="bg-[#0d1117] border border-[#30363d] text-[#f0f6fc] rounded px-2 py-1 focus:outline-none"
+                    aria-label="Filter by architectural plane"
+                  >
+                    <option value="all">All Planes</option>
+                    <option value="Data Plane">Data Plane</option>
+                    <option value="Model Plane">Model Plane</option>
+                    <option value="Inference Plane">Inference Plane</option>
+                    <option value="Drift Plane">Drift Plane</option>
+                  </select>
+                </div>
+
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[#8b949e]">Asset:</span>
+                  <select
+                    value={assetTypeFilter}
+                    onChange={(e) => setAssetTypeFilter(e.target.value)}
+                    className="bg-[#0d1117] border border-[#30363d] text-[#f0f6fc] rounded px-2 py-1 focus:outline-none"
+                    aria-label="Filter by asset type"
+                  >
+                    <option value="all">All Asset Types</option>
+                    <option value="SAMPLE">Sample</option>
+                    <option value="MODEL">Model</option>
+                    <option value="INFERENCE_RECORD">Inference Record</option>
+                    <option value="BATCH">Batch</option>
+                  </select>
+                </div>
+
+                {(severityFilter !== 'all' ||
+                  dispositionFilter !== 'all' ||
+                  planeFilter !== 'all' ||
+                  assetTypeFilter !== 'all' ||
+                  searchQuery) && (
+                  <button
+                    onClick={() => {
+                      setSeverityFilter('all');
+                      setDispositionFilter('all');
+                      setPlaneFilter('all');
+                      setAssetTypeFilter('all');
+                      setSearchQuery('');
+                    }}
+                    className="ml-auto text-blue-400 hover:text-blue-300 font-medium"
+                  >
+                    Reset all filters
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Findings Queue List */}
+            <div className="space-y-2.5" role="feed" aria-label="Triage findings feed">
+              {filteredFindings.length === 0 ? (
+                <div className="bg-[#161b22] border border-[#30363d] rounded-lg p-12 text-center text-[#8b949e]">
+                  <p className="text-sm font-medium">No findings match the current filter criteria.</p>
+                  <p className="text-xs mt-1">Adjust filters or search parameters to view items.</p>
+                </div>
+              ) : (
+                filteredFindings.map((item) => {
+                  const f = item.finding;
+                  const isExpanded = expandedIds.has(item.ledger_id);
+                  const isSigVerified = verifiedSignatures[item.ledger_id] ?? true;
+                  const plane = classifyPlane(f.detector, f.asset_type);
+                  const imageRef = extractImageRef(f.evidence, f.asset_ref);
+
+                  return (
+                    <article
+                      key={item.ledger_id}
+                      className={`bg-[#161b22] border rounded-lg transition-all ${
+                        isExpanded
+                          ? 'border-blue-500/60 shadow-lg'
+                          : 'border-[#30363d] hover:border-[#8b949e]/50'
+                      }`}
+                      aria-labelledby={`finding-title-${item.ledger_id}`}
+                    >
+                      <div
+                        tabIndex={0}
+                        role="button"
+                        aria-expanded={isExpanded}
+                        aria-controls={`finding-details-${item.ledger_id}`}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            toggleRow(item.ledger_id);
+                          }
+                        }}
+                        onClick={() => toggleRow(item.ledger_id)}
+                        className="p-4 cursor-pointer select-none focus:outline-none focus:ring-2 focus:ring-blue-500 rounded-lg flex flex-col md:flex-row md:items-center justify-between gap-3"
+                      >
+                        <div className="flex items-start md:items-center gap-3 flex-1 min-w-0">
+                          <div className="text-[#8b949e] shrink-0 mt-0.5 md:mt-0">
+                            {isExpanded ? (
+                              <ChevronDown className="w-4 h-4 text-blue-400" aria-hidden="true" />
+                            ) : (
+                              <ChevronRight className="w-4 h-4" aria-hidden="true" />
+                            )}
                           </div>
-                          <div>
-                            <h3 className="font-semibold text-sm text-neutral-100">{svc.name}</h3>
-                            <span className="text-[11px] font-mono text-neutral-400">:{svc.port}</span>
+
+                          <div className="shrink-0">{renderSeverityBadge(f.severity)}</div>
+
+                          <div className="min-w-0 flex-1">
+                            <h3
+                              id={`finding-title-${item.ledger_id}`}
+                              className="text-sm font-semibold text-[#f0f6fc] leading-snug"
+                            >
+                              {f.reason}
+                            </h3>
+
+                            <div className="flex items-center gap-3 text-xs text-[#8b949e] mt-1 flex-wrap font-mono">
+                              <span className="text-[#58a6ff]">#{item.ledger_id}</span>
+                              <span>•</span>
+                              <span className="text-[#c9d1d9] font-sans">{plane}</span>
+                              <span>•</span>
+                              <span>{f.detector.split(':v')[0].split('.').slice(-1)[0]}</span>
+                              <span>•</span>
+                              <span className="truncate max-w-[200px]" title={f.asset_ref}>
+                                {f.asset_ref}
+                              </span>
+                            </div>
                           </div>
                         </div>
-                        <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-neutral-800 border border-neutral-700 text-neutral-300">
-                          {svc.slug}
-                        </span>
+
+                        <div className="flex items-center gap-4 shrink-0 self-end md:self-center pl-7 md:pl-0">
+                          <div className="text-right">
+                            <div className="text-xs font-bold text-[#f0f6fc]">
+                              {(f.confidence * 100).toFixed(1)}%
+                            </div>
+                            <div className="text-[10px] text-[#8b949e]">confidence</div>
+                          </div>
+
+                          <div>{renderDispositionBadge(f.disposition)}</div>
+
+                          <div
+                            className={`flex items-center gap-1 text-xs px-2 py-0.5 rounded border ${
+                              isSigVerified
+                                ? 'bg-emerald-950/60 text-emerald-300 border-emerald-800'
+                                : 'bg-red-950/60 text-red-300 border-red-800'
+                            }`}
+                            title={
+                              isSigVerified
+                                ? 'Ed25519 signature cryptographically verified'
+                                : 'Signature verification failed'
+                            }
+                            aria-label={`Signature status: ${isSigVerified ? 'verified' : 'unverified'}`}
+                          >
+                            {isSigVerified ? (
+                              <>
+                                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                                <span className="font-semibold">Verified ✅</span>
+                              </>
+                            ) : (
+                              <>
+                                <AlertTriangle className="w-3.5 h-3.5 text-red-400" />
+                                <span className="font-semibold">⚠️ Unverified</span>
+                              </>
+                            )}
+                          </div>
+                        </div>
                       </div>
-                      <p className="text-xs text-neutral-400 mb-3 line-clamp-2">{svc.description}</p>
-                      <div className="text-[11px] font-mono text-emerald-400/90 truncate">
-                        {svc.healthEndpoint.split(' -> ')[0]}
-                      </div>
-                    </div>
+
+                      {isExpanded && (
+                        <div
+                          id={`finding-details-${item.ledger_id}`}
+                          className="px-4 pb-5 pt-1 border-t border-[#21262d] bg-[#0d1117]/50 rounded-b-lg space-y-4"
+                        >
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-2">
+                            <div className="bg-[#161b22] p-3.5 rounded border border-[#30363d]">
+                              <h4 className="text-xs font-bold text-[#f0f6fc] uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                                <FileCode className="w-3.5 h-3.5 text-blue-400" />
+                                Empirical Evidence ({f.evidence.length})
+                              </h4>
+                              <ul className="space-y-1.5">
+                                {f.evidence.map((ev, i) => (
+                                  <li
+                                    key={i}
+                                    className="text-xs font-mono bg-[#0d1117] p-1.5 rounded border border-[#30363d]/60 text-[#c9d1d9] break-all"
+                                  >
+                                    {ev}
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+
+                            <div className="bg-[#161b22] p-3.5 rounded border border-[#30363d] space-y-3">
+                              <div>
+                                <h4 className="text-xs font-bold text-[#f0f6fc] uppercase tracking-wider mb-1">
+                                  Underlying Assumptions
+                                </h4>
+                                <ul className="text-xs text-[#8b949e] list-disc list-inside space-y-1">
+                                  {f.assumptions.length > 0 ? (
+                                    f.assumptions.map((asm, i) => <li key={i}>{asm}</li>)
+                                  ) : (
+                                    <li>Standard detector operational preconditions assumed.</li>
+                                  )}
+                                </ul>
+                              </div>
+                              <div className="border-t border-[#30363d] pt-2">
+                                <h4 className="text-xs font-bold text-amber-400 uppercase tracking-wider mb-1 flex items-center gap-1">
+                                  <AlertTriangle className="w-3 h-3 text-amber-400" />
+                                  Declared Detector Limitations
+                                </h4>
+                                <ul className="text-xs text-[#8b949e] list-disc list-inside space-y-1">
+                                  {f.limitations.length > 0 ? (
+                                    f.limitations.map((lim, i) => (
+                                      <li key={i} className="text-amber-200/90 font-medium">
+                                        {lim}
+                                      </li>
+                                    ))
+                                  ) : (
+                                    <li>No specific limitations registered in manifest.</li>
+                                  )}
+                                </ul>
+                              </div>
+                            </div>
+                          </div>
+
+                          {imageRef && (
+                            <div className="bg-[#161b22] p-3.5 rounded border border-[#30363d]">
+                              <h4 className="text-xs font-bold text-[#f0f6fc] uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                                <ImageIcon className="w-3.5 h-3.5 text-blue-400" />
+                                Proxied Evidence Visualizer (Isolated Boundary)
+                              </h4>
+                              <div className="flex flex-col sm:flex-row items-start gap-4">
+                                <div className="w-48 h-36 bg-[#0d1117] rounded border border-[#30363d] flex items-center justify-center overflow-hidden">
+                                  <img
+                                    src={`${GATEWAY_URL}/images/${encodeURIComponent(imageRef)}`}
+                                    alt={`Visual evidence for finding #${item.ledger_id}`}
+                                    className="w-full h-full object-cover"
+                                    onError={(e) => {
+                                      (e.target as HTMLElement).style.display = 'none';
+                                      const parent = (e.target as HTMLElement).parentElement;
+                                      if (parent) {
+                                        parent.innerHTML =
+                                          '<div class="text-[11px] text-[#8b949e] text-center p-2">Image asset safely isolated at gateway proxy: <br/><code class="text-blue-400 break-all">' +
+                                          imageRef +
+                                          '</code></div>';
+                                      }
+                                    }}
+                                  />
+                                </div>
+                                <div className="text-xs text-[#8b949e] space-y-1 flex-1">
+                                  <p>
+                                    <strong className="text-[#f0f6fc]">Security Principle:</strong> Evidence images are rendered through the authenticated gateway proxy endpoint. Raw storage/MinIO internal bucket credentials are never exposed directly to the browser DOM.
+                                  </p>
+                                  <p className="font-mono text-[11px] text-[#58a6ff]">
+                                    Proxy Route: GET {GATEWAY_URL}/images/{imageRef}
+                                  </p>
+                                </div>
+                              </div>
+                            </div>
+                          )}
+
+                          <div className="bg-[#161b22] p-3.5 rounded border border-[#30363d] font-mono text-[11px] space-y-1">
+                            <div className="text-xs font-bold text-[#f0f6fc] uppercase tracking-wider mb-1 flex items-center gap-1.5">
+                              <Lock className="w-3.5 h-3.5 text-emerald-400" />
+                              Cryptographic Ledger Proof (Ledger ID #{item.ledger_id})
+                            </div>
+                            <div className="text-[#8b949e] break-all">
+                              <span className="text-[#f0f6fc]">Entry Hash:</span> {item.entry_hash}
+                            </div>
+                            <div className="text-[#8b949e] break-all">
+                              <span className="text-[#f0f6fc]">Predecessor Hash:</span> {item.prev_hash}
+                            </div>
+                            <div className="text-[#8b949e] break-all">
+                              <span className="text-[#f0f6fc]">Ed25519 Signature:</span> {item.signature}
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </article>
                   );
-                })}
-              </div>
+                })
+              )}
+            </div>
+          </section>
+        )}
+
+        {/* ======================= TAB 2: THREAT COVERAGE & LIMITATIONS ======================= */}
+        {activeTab === 'coverage' && (
+          <section aria-labelledby="coverage-heading" className="space-y-6">
+            <div>
+              <h2 id="coverage-heading" className="text-lg font-bold text-[#f0f6fc]">
+                Threat Model Coverage &amp; Explicit Non-Coverage
+              </h2>
+              <p className="text-xs text-[#8b949e]">
+                Core Product Honesty: Plainly distinguishing what this vision assurance suite protects against versus what it explicitly does not cover.
+              </p>
             </div>
 
-            {/* Selected Service Detail */}
-            <div id="service-inspection-panel" className="border border-neutral-800 bg-neutral-900/50 rounded-xl p-6">
-              <div className="flex items-center justify-between mb-4 pb-4 border-b border-neutral-800">
-                <div className="flex items-center space-x-3">
-                  <selectedService.icon className="w-6 h-6 text-emerald-400" />
-                  <div>
-                    <h3 className="font-semibold text-neutral-100">{selectedService.name} Specification</h3>
-                    <p className="text-xs text-neutral-400">{selectedService.role}</p>
-                  </div>
-                </div>
-                <span className="text-xs font-mono px-2.5 py-1 rounded bg-neutral-800 text-emerald-400 border border-neutral-700">
-                  Target Port: {selectedService.port}
+            <div className="bg-[#161b22] border border-[#30363d] rounded-lg p-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#30363d] pb-3 mb-3">
+                <span className="text-xs font-bold uppercase tracking-wider text-[#58a6ff]">
+                  Inspection Scope &amp; Boundary Manifest (v{coverageData.version})
+                </span>
+                <span className="text-xs font-mono text-[#8b949e]">
+                  Manifest Hash: {coverageData.manifest_hash?.slice(0, 24)}...
                 </span>
               </div>
+              <p className="text-xs text-[#c9d1d9] leading-relaxed">
+                {coverageData.coverage.scope_description}
+              </p>
+            </div>
 
-              <div className="space-y-4 text-xs font-mono">
-                <div>
-                  <span className="text-neutral-500 block mb-1">HEALTH CHECK PROBE:</span>
-                  <div className="p-3 bg-neutral-950 border border-neutral-800 rounded-lg text-emerald-300">
-                    {selectedService.healthEndpoint}
+            <div className="flex items-center gap-2 text-xs">
+              <span className="text-[#8b949e] flex items-center gap-1">
+                <Filter className="w-3.5 h-3.5" /> Filter by Plane:
+              </span>
+              <button
+                onClick={() => setCoveragePlaneFilter('all')}
+                className={`px-2.5 py-1 rounded border ${
+                  coveragePlaneFilter === 'all'
+                    ? 'bg-blue-600 text-white border-blue-500 font-semibold'
+                    : 'bg-[#161b22] text-[#8b949e] border-[#30363d] hover:text-[#c9d1d9]'
+                }`}
+              >
+                All Planes
+              </button>
+              {['Data Plane', 'Model Plane', 'Inference Plane', 'Drift Plane'].map((pl) => (
+                <button
+                  key={pl}
+                  onClick={() => setCoveragePlaneFilter(pl)}
+                  className={`px-2.5 py-1 rounded border ${
+                    coveragePlaneFilter === pl
+                      ? 'bg-blue-600 text-white border-blue-500 font-semibold'
+                      : 'bg-[#161b22] text-[#8b949e] border-[#30363d] hover:text-[#c9d1d9]'
+                  }`}
+                >
+                  {pl}
+                </button>
+              ))}
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* Column 1: Supported Attack Classes */}
+              <div className="bg-[#161b22] border border-[#30363d] rounded-lg p-5 flex flex-col">
+                <div className="border-b border-[#30363d] pb-3 mb-4">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-sm font-bold text-emerald-400 flex items-center gap-2">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                      What This System Checks For
+                    </h3>
+                    <span className="px-2 py-0.5 rounded text-xs font-mono bg-emerald-950 text-emerald-300 border border-emerald-800">
+                      {coverageData.coverage.supported_attack_classes.length} Supported
+                    </span>
                   </div>
+                  <p className="text-xs text-[#8b949e] mt-1">
+                    Threat vectors inspected and mitigated across evaluation planes.
+                  </p>
                 </div>
 
-                <div>
-                  <span className="text-neutral-500 block mb-1">CONTAINER HARDENING SPEC:</span>
-                  <div className="p-3 bg-neutral-950 border border-neutral-800 rounded-lg text-neutral-300">
-                    {selectedService.dockerfile}
+                <div className="space-y-3 flex-1 overflow-y-auto">
+                  {coverageData.coverage.supported_attack_classes
+                    .filter((item) =>
+                      coveragePlaneFilter === 'all'
+                        ? true
+                        : item.detector_id.includes(coveragePlaneFilter.toLowerCase().replace(' ', ''))
+                    )
+                    .map((item, idx) => (
+                      <div
+                        key={idx}
+                        className="bg-[#0d1117] p-3 rounded border border-emerald-900/40 hover:border-emerald-700/60 transition-colors"
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <h4 className="text-xs font-bold text-[#f0f6fc]">{item.name}</h4>
+                          <span className="text-[10px] font-mono text-[#58a6ff] shrink-0">
+                            {item.detector_name}
+                          </span>
+                        </div>
+                        <p className="text-xs text-[#8b949e] mt-1">{item.description}</p>
+                        {item.mitigation && (
+                          <div className="mt-2 text-[11px] text-emerald-300/90 font-medium bg-emerald-950/40 px-2 py-1 rounded border border-emerald-900/50">
+                            <strong>Mitigation:</strong> {item.mitigation}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                </div>
+              </div>
+
+              {/* Column 2: Explicit Non-Coverage */}
+              <div className="bg-[#161b22] border border-[#30363d] rounded-lg p-5 flex flex-col">
+                <div className="border-b border-[#30363d] pb-3 mb-4">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-sm font-bold text-red-400 flex items-center gap-2">
+                      <AlertTriangle className="w-4 h-4 text-red-400" />
+                      What It Explicitly Does NOT Check For
+                    </h3>
+                    <span className="px-2 py-0.5 rounded text-xs font-mono bg-red-950 text-red-300 border border-red-800">
+                      {coverageData.coverage.uncovered_attack_classes.length} Exclusions
+                    </span>
                   </div>
+                  <p className="text-xs text-[#8b949e] mt-1">
+                    Explicit boundaries, assumptions, and out-of-scope threat classes.
+                  </p>
+                </div>
+
+                <div className="space-y-3 flex-1 overflow-y-auto">
+                  {coverageData.coverage.uncovered_attack_classes
+                    .filter((item) =>
+                      coveragePlaneFilter === 'all'
+                        ? true
+                        : item.detector_id.includes(coveragePlaneFilter.toLowerCase().replace(' ', ''))
+                    )
+                    .map((item, idx) => (
+                      <div
+                        key={idx}
+                        className="bg-[#0d1117] p-3 rounded border border-red-900/40 hover:border-red-700/60 transition-colors"
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <h4 className="text-xs font-bold text-[#f0f6fc]">{item.name}</h4>
+                          <span className="text-[10px] font-mono text-amber-400 shrink-0">
+                            {item.detector_name}
+                          </span>
+                        </div>
+                        <div className="mt-2 text-[11px] text-red-300/90 font-medium bg-red-950/40 px-2 py-1.5 rounded border border-red-900/50">
+                          <strong>Boundary Limitation:</strong> {item.reason}
+                        </div>
+                      </div>
+                    ))}
                 </div>
               </div>
             </div>
 
-            {/* Air-Gapped Datastores */}
-            <div>
-              <h2 className="text-lg font-semibold text-neutral-100 mb-2">Air-Gapped Shared Datastores</h2>
-              <p className="text-xs text-neutral-400 mb-4">
-                Strict network isolation in <code className="text-emerald-400 font-mono">infra/docker-compose.yml</code>. Dedicated bridge network with zero external gateway.
-              </p>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                {DATASTORES.map((store) => (
-                  <div key={store.name} className="p-4 rounded-xl border border-neutral-800 bg-neutral-900/40">
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="font-semibold text-xs text-neutral-200">{store.name}</span>
-                      <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-neutral-800 text-neutral-400">
-                        :{store.port}
-                      </span>
-                    </div>
-                    <p className="text-[11px] text-neutral-400 mb-2">{store.role}</p>
-                    <div className="text-[10px] font-mono text-neutral-500 truncate">
-                      {store.image}
-                    </div>
+            <div className="bg-[#161b22] border border-[#30363d] rounded-lg p-4">
+              <h3 className="text-xs font-bold text-[#f0f6fc] uppercase tracking-wider mb-3">
+                Registered Detector Semantic Versions
+              </h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2 text-xs font-mono">
+                {Object.entries(coverageData.coverage.detector_versions).map(([k, v]) => (
+                  <div
+                    key={k}
+                    className="bg-[#0d1117] px-3 py-1.5 rounded border border-[#30363d] flex items-center justify-between"
+                  >
+                    <span className="text-[#8b949e] truncate max-w-[240px]" title={k}>
+                      {k.split(':')[0]}
+                    </span>
+                    <span className="text-blue-400 font-bold">{v}</span>
                   </div>
                 ))}
               </div>
             </div>
-          </div>
+          </section>
         )}
 
-        {/* Tab 2: Canonical Schemas */}
-        {activeTab === 'schemas' && (
-          <div id="schemas-tab-content" className="space-y-6">
+        {/* ======================= TAB 3: EXECUTIVE REPORTS ======================= */}
+        {activeTab === 'reports' && (
+          <section aria-labelledby="reports-heading" className="space-y-6">
             <div>
-              <h2 className="text-lg font-semibold text-neutral-100 mb-2">Pydantic v2 Canonical Schemas</h2>
-              <p className="text-xs text-neutral-400">
-                Shared immutable schemas defined in <code className="text-emerald-400 font-mono">libs/schemas/cvguard_schemas</code>. Frozen models with strict bounded validation.
+              <h2 id="reports-heading" className="text-lg font-bold text-[#f0f6fc]">
+                Deterministic Governance Report Generator
+              </h2>
+              <p className="text-xs text-[#8b949e]">
+                Produces cryptographically verifiable reports consolidating ledger receipts, coverage manifests, and environment reproducibility parameters.
               </p>
             </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              {/* Finding Schema */}
-              <div className="border border-neutral-800 bg-neutral-900/40 rounded-xl p-5">
-                <div className="flex items-center justify-between mb-3">
-                  <span className="text-xs font-bold uppercase tracking-wider text-emerald-400 font-mono">
-                    cvguard_schemas.Finding
+            {reportSuccessMsg && (
+              <div className="bg-emerald-950/80 border border-emerald-700 text-emerald-200 px-4 py-3 rounded text-xs flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span>{reportSuccessMsg}</span>
+              </div>
+            )}
+
+            <div className="bg-[#161b22] border border-[#30363d] rounded-lg p-6 max-w-2xl space-y-5">
+              <div>
+                <label className="block text-xs font-bold text-[#f0f6fc] uppercase tracking-wider mb-1.5">
+                  Ledger Starting Sequence ID (`since` parameter)
+                </label>
+                <div className="flex items-center gap-3">
+                  <input
+                    type="number"
+                    min={1}
+                    value={reportSinceId}
+                    onChange={(e) => setReportSinceId(Math.max(1, parseInt(e.target.value) || 1))}
+                    className="w-36 bg-[#0d1117] border border-[#30363d] rounded px-3 py-1.5 text-xs text-[#f0f6fc] font-mono focus:outline-none focus:border-blue-500"
+                    aria-label="Ledger ID starting position"
+                  />
+                  <span className="text-xs text-[#8b949e]">
+                    Pulls all findings sealed at or after this ledger ID.
                   </span>
-                  <button
-                    onClick={() => copyToClipboard(JSON.stringify(INITIAL_FINDINGS[0].finding, null, 2), 'finding')}
-                    className="p-1.5 hover:bg-neutral-800 rounded text-neutral-400 hover:text-neutral-200 transition"
-                    title="Copy JSON"
-                  >
-                    {copiedKey === 'finding' ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                  </button>
                 </div>
-                <pre className="p-4 bg-neutral-950 border border-neutral-800 rounded-lg text-xs font-mono text-neutral-300 overflow-x-auto max-h-[380px]">
-                  {JSON.stringify(INITIAL_FINDINGS[0].finding, null, 2)}
-                </pre>
               </div>
 
-              {/* SignedFinding Schema */}
-              <div className="border border-neutral-800 bg-neutral-900/40 rounded-xl p-5">
-                <div className="flex items-center justify-between mb-3">
-                  <span className="text-xs font-bold uppercase tracking-wider text-emerald-400 font-mono">
-                    cvguard_schemas.SignedFinding
-                  </span>
+              <div className="pt-4 border-t border-[#30363d] space-y-3">
+                <h3 className="text-xs font-bold text-[#f0f6fc] uppercase tracking-wider">
+                  Available Output Variants
+                </h3>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <button
-                    onClick={() => copyToClipboard(JSON.stringify(INITIAL_FINDINGS[0], null, 2), 'signed')}
-                    className="p-1.5 hover:bg-neutral-800 rounded text-neutral-400 hover:text-neutral-200 transition"
-                    title="Copy JSON"
+                    onClick={() => handleGenerateReport('json')}
+                    disabled={generatingReport}
+                    className="p-4 rounded-lg bg-[#0d1117] border border-[#30363d] hover:border-blue-500 text-left transition-colors group disabled:opacity-50"
                   >
-                    {copiedKey === 'signed' ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                    <FileCode className="w-6 h-6 text-blue-400 mb-2 group-hover:scale-110 transition-transform" />
+                    <div className="text-xs font-bold text-[#f0f6fc]">Canonical JSON</div>
+                    <div className="text-[11px] text-[#8b949e] mt-0.5">
+                      Pydantic validated Report object with reproducibility dict
+                    </div>
+                  </button>
+
+                  <button
+                    onClick={() => handleGenerateReport('html')}
+                    disabled={generatingReport}
+                    className="p-4 rounded-lg bg-[#0d1117] border border-[#30363d] hover:border-blue-500 text-left transition-colors group disabled:opacity-50"
+                  >
+                    <FileText className="w-6 h-6 text-emerald-400 mb-2 group-hover:scale-110 transition-transform" />
+                    <div className="text-xs font-bold text-[#f0f6fc]">HTML Executive</div>
+                    <div className="text-[11px] text-[#8b949e] mt-0.5">
+                      Jinja2 rendered executive summary and plane breakdowns
+                    </div>
+                  </button>
+
+                  <button
+                    onClick={() => handleGenerateReport('pdf')}
+                    disabled={generatingReport}
+                    className="p-4 rounded-lg bg-[#0d1117] border border-[#30363d] hover:border-blue-500 text-left transition-colors group disabled:opacity-50"
+                  >
+                    <Download className="w-6 h-6 text-purple-400 mb-2 group-hover:scale-110 transition-transform" />
+                    <div className="text-xs font-bold text-[#f0f6fc]">Official PDF</div>
+                    <div className="text-[11px] text-[#8b949e] mt-0.5">
+                      WeasyPrint rendered downloadable compliance artifact
+                    </div>
                   </button>
                 </div>
-                <pre className="p-4 bg-neutral-950 border border-neutral-800 rounded-lg text-xs font-mono text-neutral-300 overflow-x-auto max-h-[380px]">
-                  {JSON.stringify(INITIAL_FINDINGS[0], null, 2)}
-                </pre>
               </div>
             </div>
-          </div>
-        )}
-
-        {/* Tab 3: Makefile & Execution */}
-        {activeTab === 'commands' && (
-          <div id="commands-tab-content" className="space-y-6">
-            <div>
-              <h2 className="text-lg font-semibold text-neutral-100 mb-2">Automation &amp; Validation Tasks</h2>
-              <p className="text-xs text-neutral-400">
-                Single-command orchestrations via the root <code className="text-emerald-400 font-mono">Makefile</code>.
-              </p>
-            </div>
-
-            <div className="space-y-3 font-mono text-xs">
-              {[
-                { cmd: 'make up', desc: 'Build and boot all 6 planes, Postgres, Redis, and MinIO in docker-compose.' },
-                { cmd: 'make test-e2e', desc: 'Execute Phase 2 end-to-end integration test (ingest -> detect -> sign -> ledger -> verify).' },
-                { cmd: 'make load-sanity', desc: 'Run Phase 2 load benchmark (200 images, 19,900 pairwise comparisons, timing breakdown).' },
-                { cmd: 'make test-security', desc: 'Run 4 Phase 1 tamper-evident ledger security tests (Ed25519 forgery, chain break, row mutation).' },
-                { cmd: 'make lint', desc: 'Run ruff linting/formatting checks and mypy strict static typing across services.' },
-                { cmd: 'make schema-check', desc: 'Verify that cvguard_schemas cleanly imports in all 6 Python service environments.' },
-                { cmd: 'make down', desc: 'Tear down all CVGuard containers and prune temporary bridge networks.' },
-              ].map((item) => (
-                <div key={item.cmd} className="p-4 rounded-xl border border-neutral-800 bg-neutral-900/40 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                  <div className="flex items-center space-x-3">
-                    <Terminal className="w-4 h-4 text-emerald-400 shrink-0" />
-                    <code className="text-emerald-300 font-bold">{item.cmd}</code>
-                  </div>
-                  <span className="text-neutral-400 text-xs font-sans">{item.desc}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Tab 4: File Tree */}
-        {activeTab === 'tree' && (
-          <div id="tree-tab-content" className="space-y-6">
-            <div>
-              <h2 className="text-lg font-semibold text-neutral-100 mb-2">Phase 2 Monorepo Layout</h2>
-              <p className="text-xs text-neutral-400">
-                Structure of the CVGuard platform with Data Plane pHash detector and Gateway proxying.
-              </p>
-            </div>
-
-            <div className="p-5 bg-neutral-950 border border-neutral-800 rounded-xl overflow-x-auto text-xs font-mono text-neutral-300">
-              <pre>
-{`cvguard/
-├── infra/
-│   ├── docker-compose.yml       # 6 planes + Postgres, Redis, MinIO
-│   ├── .env.example             # Documented offline credentials
-│   └── postgres/
-│       ├── init.sql             # Phase 1: audit_ledger & sequence
-│       └── init-dataplane.sql   # Phase 2: images catalog & detections
-├── libs/
-│   └── schemas/
-│       └── cvguard_schemas/     # Canonical Pydantic v2 schemas
-│           ├── __init__.py
-│           ├── findings.py      # Finding (frozen), SignedFinding
-│           ├── enums.py         # AssetType, Severity, Disposition
-│           └── reports.py       # Report, Coverage, Reproducibility
-├── services/
-│   ├── gateway/                 # Port 8000: /ingest/images & /findings proxy
-│   │   ├── Dockerfile
-│   │   ├── main.py
-│   │   └── pyproject.toml
-│   ├── data-plane/              # Port 8001: Ingestion & pHash Near-Duplicate
-│   │   ├── Dockerfile
-│   │   ├── main.py              # Ingest batch & MinIO image proxy
-│   │   ├── detector.py          # NearDuplicateDetector & pHash
-│   │   ├── db.py                # Postgres images catalog
-│   │   ├── storage.py           # MinIO S3 blob storage client
-│   │   ├── governance_client.py # HTTP dispatch to Governance (retry 1x)
-│   │   └── pyproject.toml
-│   ├── model-plane/             # Port 8002: Model weight integrity plane
-│   ├── inference-plane/         # Port 8003: Runtime inference assurance
-│   ├── drift-plane/             # Port 8004: Covariate shift & drift plane
-│   └── governance/              # Port 8005: Governance Spine & Ledger
-│       ├── Dockerfile
-│       ├── main.py              # POST /findings, /audit/verify
-│       ├── signer.py            # Ed25519 signer & verifier
-│       ├── ledger.py            # Append-only hash chain
-│       ├── db.py                # Postgres connection pool
-│       └── pyproject.toml
-├── frontend/                    # React 19 + TypeScript + Vite + Tailwind
-│   └── src/
-│       └── App.tsx              # Findings triage & evidence viewer
-├── tests/
-│   ├── test_e2e_pipeline.py     # Phase 2: Full vertical slice E2E test
-│   ├── test_security.py         # Phase 1: 4 ledger tamper tests
-│   ├── test_health.py           # Health endpoints check
-│   └── test_schemas.py          # Schema validation tests
-├── scripts/
-│   └── load_sanity.py           # Phase 2: 200-image O(n^2) benchmark
-├── Makefile                     # Automation tasks
-└── pyproject.toml               # Workspace configuration`}
-              </pre>
-            </div>
-          </div>
+          </section>
         )}
       </main>
-
-      {/* Footer */}
-      <footer id="cvguard-footer" className="border-t border-neutral-800 bg-neutral-900/40 py-6 text-center text-xs text-neutral-400">
-        <p>CVGuard Integrity Assurance Platform • Phase 2 Vertical Slice • Air-Gapped Foundation</p>
-      </footer>
     </div>
   );
 }

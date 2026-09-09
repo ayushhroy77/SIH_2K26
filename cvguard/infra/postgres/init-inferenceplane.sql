@@ -10,23 +10,26 @@ CREATE TABLE IF NOT EXISTS inference_sequences (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
 );
 
--- 2. Immutable inference records with strict (model_id, sequence_number) uniqueness
+-- 2. Immutable inference records with strict (model_id, monotonic_sequence_no) uniqueness
 CREATE TABLE IF NOT EXISTS inference_records (
     record_id TEXT PRIMARY KEY,
     model_id TEXT NOT NULL,
+    monotonic_sequence_no BIGINT NOT NULL,
     sequence_number BIGINT NOT NULL,
     input_hash TEXT NOT NULL,
     config_hash TEXT NOT NULL,
     output_hash TEXT NOT NULL,
     record_hash TEXT NOT NULL,
+    nonce TEXT NOT NULL,
+    timestamp TEXT NOT NULL,
     config_json JSONB NOT NULL,
     output_json JSONB NOT NULL,
     batch_id TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
-    CONSTRAINT uq_model_sequence UNIQUE (model_id, sequence_number)
+    CONSTRAINT uq_model_sequence UNIQUE (model_id, monotonic_sequence_no)
 );
 
-CREATE INDEX IF NOT EXISTS idx_records_model_seq ON inference_records (model_id, sequence_number);
+CREATE INDEX IF NOT EXISTS idx_records_model_seq ON inference_records (model_id, monotonic_sequence_no);
 CREATE INDEX IF NOT EXISTS idx_records_batch_id ON inference_records (batch_id);
 CREATE INDEX IF NOT EXISTS idx_records_record_hash ON inference_records (record_hash);
 CREATE INDEX IF NOT EXISTS idx_records_created_at ON inference_records (created_at);

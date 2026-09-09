@@ -19,12 +19,12 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 import uvicorn
-from fastapi import FastAPI, File, Form, HTTPException, Response, UploadFile, status
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 import cvguard_schemas
-from cvguard_schemas import Finding, SignedFinding
+from cvguard_schemas import Finding, Role, SignedFinding, verify_bearer_token
 from db import (
     get_image_records,
     get_reference_distribution,
@@ -132,8 +132,51 @@ async def health() -> HealthResponse:
     )
 
 
+def require_admin_role(request: Request) -> None:
+    """Ensure that only admin users can register reference distributions."""
+    user_roles = request.headers.get("X-User-Roles")
+    auth_header = request.headers.get("authorization")
+
+    if user_roles:
+        roles = [r.strip() for r in user_roles.split(",") if r.strip()]
+        if Role.ADMIN.value not in roles:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Forbidden: Insufficient permissions",
+            )
+        return
+
+    if auth_header and auth_header.startswith("Bearer "):
+        token = auth_header[7:].strip()
+        try:
+            user = verify_bearer_token(token)
+            if not user.has_role(Role.ADMIN):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Forbidden: Insufficient permissions",
+                )
+            return
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Unauthorized: Missing or invalid authentication token",
+            )
+
+    mtls_enabled = os.getenv("CVGUARD_MTLS_ENABLED", "false").lower() in ("true", "1", "yes")
+    if mtls_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Unauthorized: Missing or invalid authentication token",
+        )
+
+
 @app.post("/reference-distributions", status_code=status.HTTP_201_CREATED)
-async def register_reference_distribution(payload: ReferenceDistributionRequest):
+async def register_reference_distribution(
+    payload: ReferenceDistributionRequest,
+    _admin: None = Depends(require_admin_role),
+):
     """Register or update an empirical reference distribution for OOD Mahalanobis detection."""
     if payload.reference_embeddings is not None and len(payload.reference_embeddings) >= 2:
         try:
@@ -492,4 +535,18 @@ async def list_images(limit: int = 50):
 
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8001, reload=False)
+    mtls = os.getenv("CVGUARD_MTLS_ENABLED", "false").lower() in ("true", "1", "yes")
+    ssl_kwargs: dict[str, Any] = {}
+    if mtls:
+        import ssl
+        cert_path = os.getenv("CVGUARD_CERT_PATH", "/etc/cvguard/certs/service.crt")
+        key_path = os.getenv("CVGUARD_KEY_PATH", "/etc/cvguard/certs/service.key")
+        ca_path = os.getenv("CVGUARD_CA_CERT_PATH", "/etc/cvguard/certs/ca.crt")
+        if os.path.isfile(cert_path) and os.path.isfile(key_path) and os.path.isfile(ca_path):
+            ssl_kwargs = {
+                "ssl_certfile": cert_path,
+                "ssl_keyfile": key_path,
+                "ssl_ca_certs": ca_path,
+                "ssl_cert_reqs": ssl.CERT_REQUIRED,
+            }
+    uvicorn.run("main:app", host="0.0.0.0", port=8001, reload=False, **ssl_kwargs)

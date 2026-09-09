@@ -100,6 +100,45 @@ All six plane services share canonical Pydantic v2 domain schemas exported by `c
 
 ---
 
+## Security Model (Phase 8 Hardening)
+
+CVGuard implements defense-in-depth zero-trust security engineered specifically for high-assurance, air-gapped environments. The security model encompasses three foundational pillars: **Transport Security (mTLS)**, **Identity & Role-Based Access Control (RBAC)**, and **Supply Chain & Dependency Hygiene**.
+
+### 1. Mutual TLS (mTLS) Architecture
+
+Internal microservice communication traverses encrypted, mutually authenticated TLS 1.3 channels:
+- **Internal Certificate Authority (Root CA)**: All inter-service communications are governed by a private, air-gapped X.509 Root CA generated via `scripts/generate_certs.py`.
+- **Cryptographic Separation**: Each service (`gateway`, `data-plane`, `model-plane`, `inference-plane`, `drift-plane`, `governance`) possesses its own leaf X.509 certificate and private key with strict Subject Alternative Names (SANs) matching its internal Docker hostname and DNS resolution.
+- **Mutual Authentication Enforcement**: Services listening for internal RPCs require client certificates (`ssl.CERT_REQUIRED`). Connections presenting certificates not signed by the trusted Root CA are rejected during the TLS handshake before HTTP parsing occurs.
+- **Client Identity Propagation**: Proxied service calls include `X-Client-Identity` headers authenticated by the underlying mTLS connection, allowing downstream services like `governance` to enforce service-level authorization (e.g. only finding producers can invoke `POST /findings`).
+
+### 2. Identity & Role-Based Access Control (RBAC)
+
+External access is mediated by Keycloak OIDC authentication and granular role-based policy enforcement:
+- **Identity Provider (IdP)**: Keycloak provides central authentication within the `cvguard` realm (`infra/keycloak/cvguard-realm.json`), generating cryptographically signed RS256/EdDSA JWT access tokens.
+- **Gateway Enforcement Boundary**: The `gateway` service acts as the initial enforcement gate. Unauthenticated requests to protected endpoints return `401 Unauthorized`.
+- **Role Hierarchy**:
+  - **`analyst`**: Operational role permitted to ingest datasets (`POST /ingest/images`), query ledger findings (`GET /findings`), and request assurance reports (`GET /reports/generate`). Restricted from modifying reference profiles or executing cryptographic audits.
+  - **`auditor`**: Compliance role permitted to execute full cryptographic hash chain and signature audits (`GET /audit/verify`) and read findings/reports. Restricted from mutating data or models.
+  - **`admin`**: Administrative role permitted to establish reference distributions (`POST /reference-distributions`), create baseline drift profiles (`POST /reference-profile`), and perform system audits.
+- **Uniform Error Disclosure Policy**: Any caller lacking the necessary role receives an HTTP `403 Forbidden` with the uniform payload `{"detail": "Forbidden: Insufficient permissions"}` to avoid leaking internal policy definitions or role structures.
+
+### 3. Dependency Pinning & Supply Chain Hygiene
+
+To eliminate supply chain tampering, unauthorized wheel modifications, and non-reproducible runtime builds:
+- **Locked Inputs & Hashes**: Every service and library defines a declarative `requirements.in` compiled into a fully pinned, multi-platform `requirements.txt` containing SHA-256 cryptographic hashes for every wheel and source archive:
+  ```bash
+  pip-compile --generate-hashes requirements.in -o requirements.txt
+  ```
+- **Strict Container Enforcement**: All Dockerfiles build with `--require-hashes`:
+  ```dockerfile
+  RUN pip install --no-cache-dir --require-hashes -r requirements.txt
+  ```
+  Installation fails instantly if any package binary differs by a single bit from the recorded cryptographic hash.
+- **Continuous Integration Verification**: GitHub Actions workflows run `make lockfile-check` (`scripts/verify_lockfiles.py`), failing the pipeline if any `requirements.txt` is missing, out-of-sync with `requirements.in`, or contains unhashed packages.
+
+---
+
 ## Local Verification Commands
 
 To verify this scaffold locally on your Linux or WSL2 workstation:
@@ -165,7 +204,8 @@ make down
 | `model-plane`       | 8002      | HTTP     | Model Weights & Checkpoints Plane |
 | `inference-plane`   | 8003      | HTTP     | Runtime Inference Integrity Plane |
 | `drift-plane`       | 8004      | HTTP     | Statistical Distribution Drift Plane |
-| `governance`        | 8005      | HTTP     | Governance Spine & Report Generator |
+| `governance`        | 8005      | HTTP / mTLS | Governance Spine & Report Generator |
+| `keycloak`          | 8080      | HTTP     | OIDC Identity Provider (Keycloak) |
 | `postgres`          | 5432      | TCP      | Relational audit log (PG 16) |
 | `redis`             | 6379      | TCP      | Stateless message cache (Redis 7) |
 | `minio` (API)       | 9000      | S3/HTTP  | Air-gapped object store |

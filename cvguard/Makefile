@@ -55,6 +55,11 @@ test-phase3:
 	PYTHONPATH=libs/schemas:services/data-plane:services/gateway:services/governance \
 	pytest -v tests/test_e2e_phase3.py
 
+test-phase8:
+	@echo "==> Running Phase 8 Security Hardening Test Suite (mTLS, RBAC, Lockfiles)..."
+	PYTHONPATH=libs/schemas:services/gateway:services/data-plane:services/model-plane:services/inference-plane:services/drift-plane:services/governance \
+	pytest -v tests/test_phase8_security.py
+
 load-sanity:
 	@echo "==> Running Phase 2 Load Sanity Benchmark (200 Synthetic Images)..."
 	python3 scripts/load_sanity.py --batch-size 200
@@ -65,6 +70,10 @@ lint:
 	ruff format --check .
 	@echo "==> Running static type analysis with mypy..."
 	MYPYPATH=libs/schemas:services/governance mypy libs/ services/ tests/
+
+lockfile-check:
+	@echo "==> Validating dependency lockfile synchronization and cryptographic SHA-256 hashes..."
+	python3 scripts/verify_lockfiles.py
 
 schema-check:
 	@echo "==> Validating that libs/schemas is importable across all 6 service plane runtimes..."

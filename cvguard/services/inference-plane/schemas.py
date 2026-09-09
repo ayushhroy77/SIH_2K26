@@ -22,7 +22,7 @@ class InferJsonRequest(BaseModel):
     """JSON payload for inference execution when not using multipart/form-data."""
 
     image_base64: str = Field(..., description="Base64-encoded raw image bytes.")
-    model_id: str = Field(..., description="Deterministic model identity reference or weight digest.")
+    model_id: str = Field(..., description="Model identifier reference or weight digest.")
     config: dict[str, Any] | str = Field(
         default_factory=dict,
         description="Preprocessing, normalization, and runtime inference parameters.",
@@ -32,22 +32,29 @@ class InferJsonRequest(BaseModel):
 class InferResponse(BaseModel):
     """Response returned upon successful inference and cryptographic binding computation."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="ignore")
 
     record_id: str = Field(..., description="Unique UUIDv4 identifier of the inference record.")
-    model_id: str = Field(..., description="Model identifier reference.")
-    sequence_number: int = Field(
+    model_id: str = Field(..., description="Model weight digest.")
+    monotonic_sequence_no: int = Field(
         ...,
         ge=1,
         description="Strictly monotonic, atomically enforced sequence number preventing replay.",
+    )
+    sequence_number: int = Field(
+        ...,
+        ge=1,
+        description="Alias for monotonic_sequence_no for compatibility.",
     )
     input_hash: str = Field(..., description="SHA-256 hex digest of the raw input image bytes.")
     config_hash: str = Field(..., description="SHA-256 hex digest of the canonical JSON config.")
     output_hash: str = Field(..., description="SHA-256 hex digest of the canonical JSON output.")
     record_hash: str = Field(
         ...,
-        description="Cryptographic leaf binding hash sealing sequence_number, model_id, inputs, config, and output.",
+        description="Cryptographic leaf binding hash sealing sequence_no, model_id, inputs, config, nonce, and output.",
     )
+    nonce: str = Field(..., description="Unique cryptographic entropy nonce.")
+    timestamp: str = Field(..., description="ISO-8601 or float timestamp.")
     output: dict[str, Any] = Field(..., description="Inference prediction output dictionary.")
     batch_id: str | None = Field(
         default=None,
@@ -60,17 +67,32 @@ class InferResponse(BaseModel):
 
 
 class VerifyResponse(BaseModel):
-    """Comprehensive verification result for an inference record."""
+    """Verification result for an inference record.
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    Per Phase 5 task:
+    GET /verify/{record_id} returns {valid: bool, reason: str}.
+    """
 
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    valid: bool = Field(
+        ...,
+        description="True if record binding and Merkle proof against published root are valid; False otherwise.",
+    )
+    reason: str = Field(
+        ...,
+        description="Detailed verification outcome or tamper explanation.",
+    )
     record_id: str = Field(..., description="Inference record UUID.")
-    model_id: str = Field(..., description="Model identifier reference.")
-    sequence_number: int = Field(..., description="Sequence number of the record.")
+    model_id: str = Field(..., description="Model weight digest.")
+    monotonic_sequence_no: int = Field(..., description="Monotonic sequence number of the record.")
+    sequence_number: int = Field(default=0, description="Alias for monotonic_sequence_no.")
     input_hash: str = Field(..., description="Computed/stored input hash.")
     config_hash: str = Field(..., description="Computed/stored config hash.")
     output_hash: str = Field(..., description="Computed/stored output hash.")
     record_hash: str = Field(..., description="Cryptographic record binding hash.")
+    nonce: str | None = Field(default=None, description="Cryptographic nonce.")
+    timestamp: str | None = Field(default=None, description="Record creation timestamp.")
     batch_id: str | None = Field(default=None, description="Batch identifier containing this record.")
     merkle_root: str | None = Field(default=None, description="Merkle root of the containing batch.")
     merkle_proof: list[MerkleProofStep] = Field(
@@ -78,11 +100,11 @@ class VerifyResponse(BaseModel):
         description="Sibling hash path required to prove leaf inclusion in the Merkle root.",
     )
     proof_valid: bool = Field(
-        ...,
+        default=False,
         description="True if the Merkle proof mathematically computes to the batch Merkle root.",
     )
     governance_sealed: bool = Field(
-        ...,
+        default=False,
         description="True if the batch is sealed with a valid signature and recorded in the Governance Spine.",
     )
     ledger_id: int | None = Field(
@@ -94,14 +116,13 @@ class VerifyResponse(BaseModel):
         description="Hex-encoded Ed25519 digital signature from Governance Spine.",
     )
     tampered: bool = Field(
-        ...,
+        default=False,
         description="True if any post-hoc alteration or integrity violation was detected.",
     )
     status: str = Field(
-        ...,
-        description="Overall status summary: 'VERIFIED', 'PENDING_BATCH', or 'TAMPERED'.",
+        default="PENDING_BATCH",
+        description="Status: 'VERIFIED', 'PENDING_BATCH', or 'TAMPERED'.",
     )
-    reason: str | None = Field(default=None, description="Explanation if tampered or pending.")
 
 
 class BatchFlushResponse(BaseModel):

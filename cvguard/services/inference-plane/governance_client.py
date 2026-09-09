@@ -7,11 +7,11 @@ import logging
 import os
 
 import httpx
-from cvguard_schemas import Finding, SignedFinding
+from cvguard_schemas import Finding, SignedFinding, get_httpx_mtls_kwargs
 
 logger = logging.getLogger("cvguard.inferenceplane.governance_client")
 
-DEFAULT_GOVERNANCE_URL = os.getenv("INTERNAL_GOVERNANCE_URL", "http://governance:8005")
+DEFAULT_GOVERNANCE_URL = os.getenv("INTERNAL_GOVERNANCE_URL", "https://governance:8005")
 
 
 class GovernanceDispatchError(RuntimeError):
@@ -26,6 +26,7 @@ async def dispatch_finding_to_governance(
 
     Decoupled plane architecture: does not write directly to governance database.
     Fails loudly if unsealed — never drops an inference record finding.
+    Uses mutual TLS (mTLS) with client certificate verification when connecting internally.
     """
     base_url = governance_url or os.getenv("INTERNAL_GOVERNANCE_URL", DEFAULT_GOVERNANCE_URL)
     endpoint = f"{base_url.rstrip('/')}/findings"
@@ -33,9 +34,10 @@ async def dispatch_finding_to_governance(
 
     last_error: str | None = None
     timeout = httpx.Timeout(10.0, connect=5.0)
+    mtls_kwargs = get_httpx_mtls_kwargs(service_name="inference-plane")
 
     # Retry once (total 2 attempts)
-    async with httpx.AsyncClient(timeout=timeout) as client:
+    async with httpx.AsyncClient(timeout=timeout, **mtls_kwargs) as client:
         for attempt in range(2):
             try:
                 response = await client.post(endpoint, json=payload)

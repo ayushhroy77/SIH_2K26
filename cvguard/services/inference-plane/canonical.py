@@ -1,11 +1,13 @@
 """Canonical serialization and cryptographic hashing utilities for CVGuard Inference Plane.
 
-Provides deterministic cryptographic binding between:
-1. Input image bytes (input_hash = SHA-256(image_bytes))
-2. Model identity reference (model_id = ingested model weight digest / identifier)
-3. Preprocessing / inference config (config_hash = SHA-256(canonical_json(config)))
-4. Model prediction output (output_hash = SHA-256(canonical_json(output)))
-5. Atomically-enforced monotonic sequence number (sequence_number)
+Phase 5: Verifiable cryptographic binding between:
+1. raw input image bytes (input_hash = SHA-256(image_bytes))
+2. model identity (model_id = weight digest of the actual model file/weights)
+3. preprocessing & inference config (config_hash = SHA-256(canonical_json(config)))
+4. prediction output (output)
+5. ISO-8601 timestamp (timestamp)
+6. atomically-enforced monotonic sequence number (monotonic_sequence_no)
+7. cryptographic entropy nonce (nonce)
 """
 
 from __future__ import annotations
@@ -19,10 +21,10 @@ def canonical_json(data: Any) -> str:
     """Serialize any JSON-compatible structure into deterministic, compact canonical JSON.
 
     Rules:
-    - Dict keys sorted lexicographically
+    - Dict keys sorted lexicographically at all levels
     - Compact delimiters: separators=(',', ':')
     - No extraneous whitespace
-    - UTF-8 compatible
+    - ensure_ascii=False for standard UTF-8 representations
     """
     return json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
@@ -33,14 +35,14 @@ def canonical_json_bytes(data: Any) -> bytes:
 
 
 def compute_sha256(data: bytes | str) -> str:
-    """Compute SHA256 hex digest for arbitrary bytes or string."""
+    """Compute 64-character lowercase hexadecimal SHA-256 digest."""
     if isinstance(data, str):
         data = data.encode("utf-8")
     return hashlib.sha256(data).hexdigest()
 
 
 def compute_input_hash(image_bytes: bytes) -> str:
-    """Compute SHA-256 hex digest of raw image bytes."""
+    """Compute SHA-256 hex digest of raw image bytes (binds to exact image)."""
     return hashlib.sha256(image_bytes).hexdigest()
 
 
@@ -55,7 +57,7 @@ def compute_config_hash(config: dict[str, Any] | str) -> str:
     return compute_sha256(canonical_json_bytes(config))
 
 
-def compute_output_hash(output: dict[str, Any] | list[Any] | str) -> str:
+def compute_output_hash(output: Any) -> str:
     """Compute SHA-256 hex digest of canonical JSON model output."""
     if isinstance(output, (dict, list)):
         return compute_sha256(canonical_json_bytes(output))
@@ -69,49 +71,72 @@ def compute_output_hash(output: dict[str, Any] | list[Any] | str) -> str:
 
 
 def canonical_record_payload(
-    record_id: str,
-    model_id: str,
-    sequence_number: int,
     input_hash: str,
+    model_id: str,
     config_hash: str,
-    output_hash: str,
+    output: Any,
+    timestamp: str | float,
+    monotonic_sequence_no: int,
+    nonce: str,
+    record_id: str | None = None,
 ) -> dict[str, Any]:
-    """Construct deterministic dictionary binding all inference provenance components."""
-    return {
+    """Construct deterministic dictionary binding all inference provenance components.
+
+    Record schema:
+    {
+        "config_hash": <SHA-256 of canonical preprocessing + inference config>,
+        "input_hash": <SHA-256 of raw image bytes>,
+        "model_id": <model weight digest>,
+        "monotonic_sequence_no": <strictly monotonic sequence number>,
+        "nonce": <unique cryptographic entropy nonce>,
+        "output": <model prediction output structure>,
+        "timestamp": <ISO-8601 or float timestamp>
+    }
+    """
+    payload: dict[str, Any] = {
         "config_hash": config_hash,
         "input_hash": input_hash,
         "model_id": model_id,
-        "output_hash": output_hash,
-        "record_id": record_id,
-        "sequence_number": sequence_number,
+        "monotonic_sequence_no": monotonic_sequence_no,
+        "nonce": nonce,
+        "output": output,
+        "timestamp": timestamp,
     }
+    if record_id is not None:
+        payload["record_id"] = record_id
+    return payload
 
 
 def compute_record_hash(
-    record_id: str,
-    model_id: str,
-    sequence_number: int,
     input_hash: str,
+    model_id: str,
     config_hash: str,
-    output_hash: str,
+    output: Any,
+    timestamp: str | float,
+    monotonic_sequence_no: int,
+    nonce: str,
+    record_id: str | None = None,
 ) -> str:
-    """Compute cryptographic binding hash of an inference record.
+    """Compute cryptographic binding hash (leaf hash) of an inference record.
 
     record_hash = SHA-256(canonical_json({
         "config_hash": config_hash,
         "input_hash": input_hash,
         "model_id": model_id,
-        "output_hash": output_hash,
-        "record_id": record_id,
-        "sequence_number": sequence_number
+        "monotonic_sequence_no": monotonic_sequence_no,
+        "nonce": nonce,
+        "output": output,
+        "timestamp": timestamp
     }))
     """
     payload = canonical_record_payload(
-        record_id=record_id,
-        model_id=model_id,
-        sequence_number=sequence_number,
         input_hash=input_hash,
+        model_id=model_id,
         config_hash=config_hash,
-        output_hash=output_hash,
+        output=output,
+        timestamp=timestamp,
+        monotonic_sequence_no=monotonic_sequence_no,
+        nonce=nonce,
+        record_id=record_id,
     )
     return compute_sha256(canonical_json_bytes(payload))

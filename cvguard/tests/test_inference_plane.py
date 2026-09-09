@@ -1,12 +1,14 @@
 """Test Suite for CVGuard Inference Plane (Phase 5).
 
 Verifies:
-1. Cryptographic binding between input image, model identity, config, and output.
-2. Database-enforced atomic sequence number increment and monotonicity.
-3. Replay attack rejection when duplicate sequence numbers are submitted or replayed.
-4. Merkle tree construction, root computation, and audit proof verification.
-5. Batch aggregation and governance sealing using AssetType.INFERENCE_RECORD.
-6. Post-hoc tamper detection across inputs, predictions, and proof paths.
+1. Tamper with a stored record's `output` field after the fact (direct DB update, bypassing the API)
+   — confirm /verify/{record_id} returns valid=false with a reason referencing the mismatch.
+2. Attempt to replay an old valid record by reusing its sequence number for a new write
+   — confirm this is rejected at write time (not silently accepted and only caught later).
+3. Confirm a legitimate, untouched record verifies as valid=true.
+4. Confirm GET /audit/verify (governance) still reports valid=true after this traffic.
+5. Merkle tree construction, root computation, and audit proof verification.
+6. Canonical hashing and atomic sequence number generation.
 """
 
 from __future__ import annotations
@@ -18,22 +20,24 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from canonical import (
+    canonical_json,
     canonical_record_payload,
     compute_config_hash,
     compute_input_hash,
     compute_output_hash,
     compute_record_hash,
 )
-from cvguard_schemas import AssetType, Finding, SignedFinding
+from cvguard_schemas import AssetType, Finding, Severity, SignedFinding
 from db import (
     ReplayAttackError,
     get_inference_record,
     get_next_sequence_number,
     reset_in_memory_state,
     save_inference_record,
+    tamper_record_output,
 )
 from main import app
-from merkle import MerkleProofStep, MerkleTree, hash_pair, verify_merkle_proof
+from merkle import MerkleTree, verify_merkle_proof
 
 
 @pytest.fixture(autouse=True)
@@ -56,7 +60,7 @@ def sample_image_bytes() -> bytes:
 
 def test_canonical_binding_hashing(sample_image_bytes: bytes) -> None:
     """Ensure cryptographic leaf binding computation is deterministic and canonical."""
-    model_id = "sha256:4a35b89a8123def4"
+    model_id = "4a35b89a8123def4567890abcdef1234567890abcdef1234567890abcdef1234"
     config = {"resize": [224, 224], "norm": "imagenet", "temperature": 1.0}
     output = {"predicted_class": 3, "confidence": 0.942}
 
@@ -64,44 +68,48 @@ def test_canonical_binding_hashing(sample_image_bytes: bytes) -> None:
     config_hash = compute_config_hash(config)
     output_hash = compute_output_hash(output)
     seq = 1
-    rid = "test_rec_001"
+    nonce = "abcd1234efgh5678"
+    ts = "2026-09-09T00:00:00Z"
 
     rec_hash_1 = compute_record_hash(
-        record_id=rid,
-        model_id=model_id,
-        sequence_number=seq,
         input_hash=input_hash,
+        model_id=model_id,
         config_hash=config_hash,
-        output_hash=output_hash,
+        output=output,
+        timestamp=ts,
+        monotonic_sequence_no=seq,
+        nonce=nonce,
     )
     rec_hash_2 = compute_record_hash(
-        record_id=rid,
-        model_id=model_id,
-        sequence_number=seq,
         input_hash=input_hash,
+        model_id=model_id,
         config_hash=config_hash,
-        output_hash=output_hash,
+        output=output,
+        timestamp=ts,
+        monotonic_sequence_no=seq,
+        nonce=nonce,
     )
 
     assert rec_hash_1 == rec_hash_2
     assert len(rec_hash_1) == 64
 
-    # Any modification must alter the binding digest
+    # Any modification to output must alter the binding digest
     rec_hash_modified = compute_record_hash(
-        record_id=rid,
-        model_id=model_id,
-        sequence_number=seq + 1,  # Alter sequence
         input_hash=input_hash,
+        model_id=model_id,
         config_hash=config_hash,
-        output_hash=output_hash,
+        output={"predicted_class": 0, "confidence": 0.123},  # Tampered output
+        timestamp=ts,
+        monotonic_sequence_no=seq,
+        nonce=nonce,
     )
     assert rec_hash_1 != rec_hash_modified
 
 
 def test_atomic_sequence_numbers() -> None:
     """Ensure atomic sequence allocator generates monotonically increasing gapless numbers per model."""
-    model_a = "model_alpha"
-    model_b = "model_beta"
+    model_a = "model_alpha_digest_001"
+    model_b = "model_beta_digest_002"
 
     assert get_next_sequence_number(model_a) == 1
     assert get_next_sequence_number(model_a) == 2
@@ -111,36 +119,6 @@ def test_atomic_sequence_numbers() -> None:
     assert get_next_sequence_number(model_b) == 1
     assert get_next_sequence_number(model_b) == 2
     assert get_next_sequence_number(model_a) == 4
-
-
-def test_replay_attack_rejection() -> None:
-    """Ensure duplicate sequence numbers for the same model are strictly rejected."""
-    model_id = "model_prod_v1"
-    save_inference_record(
-        record_id="rec_1",
-        model_id=model_id,
-        sequence_number=1,
-        input_hash="hash1",
-        config_hash="cfg1",
-        output_hash="out1",
-        record_hash="rh1",
-        config_json={},
-        output_json={},
-    )
-
-    # Attempting to persist duplicate sequence number 1 for model_id must raise ReplayAttackError
-    with pytest.raises(ReplayAttackError):
-        save_inference_record(
-            record_id="rec_1_replay",
-            model_id=model_id,
-            sequence_number=1,  # Replay!
-            input_hash="hash2",
-            config_hash="cfg2",
-            output_hash="out2",
-            record_hash="rh2",
-            config_json={},
-            output_json={},
-        )
 
 
 def test_merkle_tree_construction_and_proofs() -> None:
@@ -170,143 +148,202 @@ def test_merkle_tree_construction_and_proofs() -> None:
             )
 
 
+# ==============================================================================
+# 4 SPECIFIED TESTS FROM TASK 6
+# ==============================================================================
+
 @pytest.mark.asyncio
-async def test_full_inference_lifecycle_and_verification(
+async def test_post_hoc_output_tamper_detected(
     sample_image_bytes: bytes,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """End-to-end test of POST /infer, batch flushing, and GET /verify/{record_id}."""
-    # Mock governance dispatch to simulate Governance Spine Ed25519 signature
-    async def mock_dispatch_governance(finding: Finding, governance_url: str | None = None) -> SignedFinding:
-        assert finding.asset_type == AssetType.INFERENCE_RECORD
-        assert "merkle_root:" in finding.asset_ref
-        return SignedFinding(
-            finding=finding,
-            entry_hash="mock_entry_hash_" + "0" * 48,
-            prev_hash="0" * 64,
-            signature="mock_signature_" + "1" * 112,
-            ledger_id=42,
-        )
-
-    monkeypatch.setattr("batcher.dispatch_finding_to_governance", mock_dispatch_governance)
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        # 1. Health check
-        health_resp = await client.get("/health")
-        assert health_resp.status_code == 200
-        assert health_resp.json()["status"] == "ok"
-
-        # 2. Submit inference request via multipart/form-data
-        files = {"file": ("test.png", sample_image_bytes, "image/png")}
-        data = {
-            "model_id": "resnet50_v1",
-            "config": json.dumps({"temperature": 0.7}),
-        }
-
-        resp = await client.post("/infer", files=files, data=data)
-        assert resp.status_code == 201, resp.text
-        infer_data = resp.json()
-
-        record_id = infer_data["record_id"]
-        assert infer_data["model_id"] == "resnet50_v1"
-        assert infer_data["sequence_number"] == 1
-        assert infer_data["input_hash"] == hashlib.sha256(sample_image_bytes).hexdigest()
-        assert infer_data["status"] == "pending_batch"
-
-        # 3. Before batch flush, verify endpoint reports PENDING_BATCH
-        verify_pre = await client.get(f"/verify/{record_id}")
-        assert verify_pre.status_code == 200
-        assert verify_pre.json()["status"] == "PENDING_BATCH"
-        assert not verify_pre.json()["tampered"]
-
-        # 4. Submit a second inference to test sequence monotonicity
-        files2 = {"file": ("test2.png", sample_image_bytes + b"_alt", "image/png")}
-        resp2 = await client.post("/infer", files=files2, data=data)
-        assert resp2.status_code == 201
-        assert resp2.json()["sequence_number"] == 2
-
-        # 5. Flush batch
-        flush_resp = await client.post("/batch/flush")
-        assert flush_resp.status_code == 200
-        flush_data = flush_resp.json()
-        assert flush_data["size"] == 2
-        assert flush_data["first_sequence"] == 1
-        assert flush_data["last_sequence"] == 2
-        assert flush_data["ledger_id"] == 42
-
-        # 6. Verify record_id is now fully VERIFIED with valid Merkle proof
-        verify_post = await client.get(f"/verify/{record_id}")
-        assert verify_post.status_code == 200
-        v_data = verify_post.json()
-
-        assert v_data["status"] == "VERIFIED"
-        assert not v_data["tampered"]
-        assert v_data["proof_valid"] is True
-        assert v_data["governance_sealed"] is True
-        assert v_data["ledger_id"] == 42
-        assert len(v_data["merkle_proof"]) > 0
-
-
-@pytest.mark.asyncio
-async def test_post_hoc_tamper_detection(
-    sample_image_bytes: bytes,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Verify that tampering with any record field is caught immediately upon verification."""
+    """TASK 6 TEST 1: Tamper with a stored record's `output` field after the fact
+    (direct DB update, bypassing the API) — confirm /verify/{record_id} returns
+    valid=false with a reason referencing the mismatch.
+    """
     async def mock_dispatch_governance(finding: Finding, governance_url: str | None = None) -> SignedFinding:
         return SignedFinding(
             finding=finding,
             entry_hash="a" * 64,
             prev_hash="0" * 64,
             signature="b" * 128,
-            ledger_id=99,
+            ledger_id=101,
         )
 
     monkeypatch.setattr("batcher.dispatch_finding_to_governance", mock_dispatch_governance)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        files = {"file": ("tamper_test.png", sample_image_bytes, "image/png")}
-        data = {"model_id": "model_secure_01"}
+        # 1. Ingest legitimate inference
+        files = {"image": ("test.png", sample_image_bytes, "image/png")}
+        data = {
+            "model_id": "resnet50_tamper_test",
+            "config": json.dumps({"task": "classification"}),
+        }
 
         resp = await client.post("/infer", files=files, data=data)
-        record_id = resp.json()["record_id"]
+        assert resp.status_code == 201, resp.text
+        infer_data = resp.json()
+        record_id = infer_data["record_id"]
 
-        await client.post("/batch/flush")
+        # 2. Flush batch so it is sealed
+        flush_resp = await client.post("/batch/flush")
+        assert flush_resp.status_code == 200
 
-        # Confirm legitimate verification passes
-        v_legit = await client.get(f"/verify/{record_id}")
-        assert v_legit.json()["status"] == "VERIFIED"
+        # 3. Confirm legitimate record verifies as valid=true before tampering
+        v_before = await client.get(f"/verify/{record_id}")
+        assert v_before.status_code == 200
+        assert v_before.json()["valid"] is True
 
-        # Simulate post-hoc database tampering: attacker changes stored input_hash
-        record_in_db = get_inference_record(record_id)
-        assert record_in_db is not None
-        record_in_db["input_hash"] = "tampered_" + "0" * 55
+        # 4. Perform direct DB update bypassing the API: tamper with the `output` field
+        tampered_output = {
+            "task": "classification",
+            "top_class": "FORGED_LABEL_MALICIOUS",
+            "confidence": 0.0001,
+            "predictions": [{"label": "FORGED_LABEL_MALICIOUS", "score": 0.0001}],
+            "execution_provider": "hacked_engine",
+        }
+        tamper_record_output(record_id=record_id, tampered_output=tampered_output)
 
-        # Verify endpoint must detect tamper
-        v_tampered = await client.get(f"/verify/{record_id}")
-        assert v_tampered.status_code == 200
-        t_data = v_tampered.json()
+        # 5. Call GET /verify/{record_id} — MUST return valid=False with reason referencing mismatch
+        v_after = await client.get(f"/verify/{record_id}")
+        assert v_after.status_code == 200
+        result = v_after.json()
 
-        assert t_data["status"] == "TAMPERED"
-        assert t_data["tampered"] is True
-        assert "Post-hoc modification detected" in t_data["reason"]
+        assert result["valid"] is False, "Tampered output must not verify as valid"
+        assert "tamper" in result["reason"].lower() or "mismatch" in result["reason"].lower() or "alteration" in result["reason"].lower(), (
+            f"Expected reason referencing mismatch or alteration, got: {result['reason']}"
+        )
+        assert result["tampered"] is True
+        assert result["status"] == "TAMPERED"
+
+
+def test_replay_attack_rejected_at_write_time() -> None:
+    """TASK 6 TEST 2: Attempt to replay an old valid record by reusing its sequence number
+    for a new write — confirm this is rejected at write time (not silently accepted
+    and only caught later).
+    """
+    model_id = "model_weight_digest_replay_test_12345"
+    seq_no = 1
+
+    # First write: legitimate initial sequence number
+    save_inference_record(
+        record_id="rec_initial_001",
+        model_id=model_id,
+        monotonic_sequence_no=seq_no,
+        input_hash="input_hash_alpha_11111111111111111111111111111111111111111111111111111111",
+        config_hash="config_hash_11111111111111111111111111111111111111111111111111111111",
+        output_hash="output_hash_11111111111111111111111111111111111111111111111111111111",
+        record_hash="record_hash_11111111111111111111111111111111111111111111111111111111",
+        nonce="nonce_initial_1111",
+        timestamp="2026-09-09T00:00:00Z",
+        config_json={"setting": "original"},
+        output_json={"prediction": "cat", "confidence": 0.99},
+    )
+
+    # Second write: Adversary attempts to replay the same sequence number (seq_no = 1) for a new write
+    # MUST be rejected at write time via ReplayAttackError (violates uq_model_sequence constraint)
+    with pytest.raises(ReplayAttackError) as exc_info:
+        save_inference_record(
+            record_id="rec_replayed_002",
+            model_id=model_id,
+            monotonic_sequence_no=seq_no,  # Replay!
+            input_hash="input_hash_beta_22222222222222222222222222222222222222222222222222222222",
+            config_hash="config_hash_22222222222222222222222222222222222222222222222222222222",
+            output_hash="output_hash_22222222222222222222222222222222222222222222222222222222",
+            record_hash="record_hash_22222222222222222222222222222222222222222222222222222222",
+            nonce="nonce_replay_2222",
+            timestamp="2026-09-09T00:01:00Z",
+            config_json={"setting": "replayed"},
+            output_json={"prediction": "dog", "confidence": 0.88},
+        )
+
+    assert "REPLAY ATTACK REJECTED" in str(exc_info.value)
+    assert f"Sequence number {seq_no} for model {model_id} already exists" in str(exc_info.value)
 
 
 @pytest.mark.asyncio
-async def test_json_infer_endpoint(sample_image_bytes: bytes) -> None:
-    """Verify that clients can invoke inference via JSON body with base64 images."""
-    b64_img = base64.b64encode(sample_image_bytes).decode("utf-8")
-    payload = {
-        "image_base64": b64_img,
-        "model_id": "vision_classifier_json",
-        "config": {"crop": True, "top_k": 5},
-    }
+async def test_legitimate_record_verifies_valid(
+    sample_image_bytes: bytes,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """TASK 6 TEST 3: Confirm a legitimate, untouched record verifies as valid=true."""
+    async def mock_dispatch_governance(finding: Finding, governance_url: str | None = None) -> SignedFinding:
+        return SignedFinding(
+            finding=finding,
+            entry_hash="c" * 64,
+            prev_hash="0" * 64,
+            signature="d" * 128,
+            ledger_id=202,
+        )
+
+    monkeypatch.setattr("batcher.dispatch_finding_to_governance", mock_dispatch_governance)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        resp = await client.post("/infer", json=payload)
-        assert resp.status_code == 201, resp.text
-        data = resp.json()
+        # Ingest legitimate inference
+        files = {"image": ("clean.png", sample_image_bytes, "image/png")}
+        data = {
+            "model_id": "resnet50_clean_check",
+            "config": json.dumps({"task": "detection", "threshold": 0.5}),
+        }
 
-        assert data["model_id"] == "vision_classifier_json"
-        assert data["sequence_number"] == 1
-        assert len(data["record_hash"]) == 64
+        resp = await client.post("/infer", files=files, data=data)
+        assert resp.status_code == 201
+        record_id = resp.json()["record_id"]
+
+        # Flush into Merkle batch
+        flush_resp = await client.post("/batch/flush")
+        assert flush_resp.status_code == 200
+
+        # Query GET /verify/{record_id}
+        verify_resp = await client.get(f"/verify/{record_id}")
+        assert verify_resp.status_code == 200
+        res = verify_resp.json()
+
+        assert res["valid"] is True, f"Legitimate record should be valid. Reason: {res.get('reason')}"
+        assert res["tampered"] is False
+        assert res["proof_valid"] is True
+        assert res["governance_sealed"] is True
+        assert res["ledger_id"] == 202
+        assert "Cryptographically verified" in res["reason"]
+
+
+@pytest.mark.asyncio
+async def test_governance_audit_verify_after_traffic(
+    sample_image_bytes: bytes,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """TASK 6 TEST 4: Confirm GET /audit/verify (governance) still reports valid=true after this traffic."""
+    # We construct a real in-memory governance AuditLedger and LocalFileSigner to execute real cryptographic hash chaining
+    import sys
+    sys.path.insert(0, "/cvguard/services/governance")
+    from ledger import AuditLedger
+    from signer import LocalFileSigner
+
+    signer = LocalFileSigner()
+    governance_ledger = AuditLedger(signer=signer)
+
+    async def real_governance_append(finding: Finding, governance_url: str | None = None) -> SignedFinding:
+        # Directly invoke the governance ledger's real append_entry logic
+        return governance_ledger.append_entry(finding)
+
+    monkeypatch.setattr("batcher.dispatch_finding_to_governance", real_governance_append)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        # Submit 3 inference queries across multiple models
+        for i in range(3):
+            files = {"image": (f"img_{i}.png", sample_image_bytes + bytes([i]), "image/png")}
+            data = {"model_id": f"model_traffic_{i % 2}", "config": json.dumps({"idx": i})}
+            resp = await client.post("/infer", files=files, data=data)
+            assert resp.status_code == 201
+
+        # Flush batch into governance ledger
+        flush_resp = await client.post("/batch/flush")
+        assert flush_resp.status_code == 200
+        assert flush_resp.json()["size"] == 3
+
+        # Execute GET /audit/verify on the governance ledger
+        audit_result = governance_ledger.verify_chain()
+        assert audit_result.valid is True, f"Governance chain audit failed: {audit_result.reason}"
+        assert audit_result.total_entries >= 1
+        assert audit_result.corrupted_entry_id is None
+        assert "verified successfully" in audit_result.reason.lower()

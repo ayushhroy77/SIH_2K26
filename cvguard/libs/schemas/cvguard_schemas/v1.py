@@ -132,13 +132,25 @@ class CoverageStatement(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    total_assets_scanned: int = Field(..., ge=0)
-    passed_count: int = Field(..., ge=0)
-    flagged_count: int = Field(..., ge=0)
+    total_assets_scanned: int = Field(default=0, ge=0)
+    passed_count: int = Field(default=0, ge=0)
+    flagged_count: int = Field(default=0, ge=0)
     skipped_count: int = Field(default=0, ge=0)
     scope_description: str = Field(
         default="Full offline plane inspection",
         description="Narrative scope of the coverage run.",
+    )
+    supported_attack_classes: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Consolidated list of supported attack and anomaly classes.",
+    )
+    uncovered_attack_classes: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Consolidated list of explicit out-of-scope or uncovered attack classes.",
+    )
+    detector_versions: dict[str, str] = Field(
+        default_factory=dict,
+        description="Per-plane or per-detector declared version mappings.",
     )
 
 
@@ -159,9 +171,9 @@ class Report(BaseModel):
         default="CVGuard Integrity Assurance Report",
         description="Human-readable title for the report.",
     )
-    findings: list[Finding] = Field(
+    findings: list[SignedFinding | Finding] = Field(
         default_factory=list,
-        description="List of all detected findings across evaluated planes.",
+        description="List of all detected findings or signed findings across evaluated planes.",
     )
     coverage: CoverageStatement = Field(
         ...,

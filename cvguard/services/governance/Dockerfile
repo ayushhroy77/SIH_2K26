@@ -12,11 +12,13 @@ WORKDIR /build
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
+# Install locked dependencies with cryptographic hash verification
+COPY services/governance/requirements.txt /build/services/governance/
+RUN pip install --no-cache-dir --require-hashes -r /build/services/governance/requirements.txt
+
+# Copy and install internal shared schemas package
 COPY libs/schemas /build/libs/schemas
 RUN pip install --no-deps /build/libs/schemas
-
-COPY services/governance/pyproject.toml /build/services/governance/
-RUN pip install "fastapi>=0.110.0,<1.0.0" "uvicorn[standard]>=0.28.0,<1.0.0" "pydantic>=2.7.0,<3.0.0" "cryptography>=42.0.0" "psycopg[binary]>=3.1.18"
 
 # --- Runtime Stage ---
 FROM python:3.12.9-slim-bookworm AS runner

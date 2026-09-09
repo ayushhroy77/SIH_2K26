@@ -1,0 +1,8 @@
+# CVGuard Inference Plane service dependencies
+fastapi==0.111.0
+uvicorn[standard]==0.30.1
+pydantic==2.7.4
+psycopg[binary]==3.1.19
+httpx==0.27.0
+python-multipart==0.0.9
+cryptography==42.0.8

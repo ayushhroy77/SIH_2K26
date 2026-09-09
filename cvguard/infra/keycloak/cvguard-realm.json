@@ -1,0 +1,110 @@
+{
+  "id": "cvguard",
+  "realm": "cvguard",
+  "displayName": "CVGuard Offline Integrity Assurance",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": false,
+  "editUsernameAllowed": false,
+  "bruteForceProtected": true,
+  "roles": {
+    "realm": [
+      {
+        "name": "analyst",
+        "description": "Assurance analyst with read-only access to findings, triage queues, and generated reports."
+      },
+      {
+        "name": "admin",
+        "description": "Security administrator with privilege to register reference profiles and baseline distributions."
+      },
+      {
+        "name": "auditor",
+        "description": "Independent compliance auditor with read access to the tamper-evident ledger and cryptographic proofs."
+      }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "cvguard-gateway",
+      "name": "CVGuard API Gateway",
+      "description": "External API gateway client enforcing OIDC JWT authentication and RBAC.",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": true,
+      "bearerOnly": false,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": false,
+      "fullScopeAllowed": true,
+      "redirectUris": [
+        "http://localhost:3000/*",
+        "http://localhost:8000/*"
+      ],
+      "webOrigins": [
+        "http://localhost:3000",
+        "http://localhost:8000",
+        "+"
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "analyst_user",
+      "email": "analyst@cvguard.local",
+      "firstName": "Assurance",
+      "lastName": "Analyst",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "analyst_pass_cvguard_dev",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "analyst"
+      ]
+    },
+    {
+      "username": "admin_user",
+      "email": "admin@cvguard.local",
+      "firstName": "Security",
+      "lastName": "Admin",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "admin_pass_cvguard_dev",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "admin"
+      ]
+    },
+    {
+      "username": "auditor_user",
+      "email": "auditor@cvguard.local",
+      "firstName": "Compliance",
+      "lastName": "Auditor",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "auditor_pass_cvguard_dev",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "auditor"
+      ]
+    }
+  ]
+}

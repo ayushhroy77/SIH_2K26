@@ -1,7 +1,7 @@
-"""PostgreSQL and fallback persistence layer for CVGuard Inference Plane.
+"""PostgreSQL persistence layer and replay-resistant sequence enforcement for CVGuard Inference Plane.
 
-Enforces atomic sequence numbers per model to prevent replay attacks and stores
-cryptographically bound inference records and Merkle batches.
+Phase 5: Atomically increments and enforces monotonic sequence numbers per model identity
+in PostgreSQL to prevent replay attacks at write time.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from psycopg.rows import dict_row
 
 logger = logging.getLogger("cvguard.inferenceplane.db")
 
-# Thread lock for in-memory fallback state to ensure thread-safe atomic sequence increments
+# Thread lock for in-memory fallback state to guarantee atomic sequence increments and replay checks
 _IN_MEMORY_LOCK = threading.Lock()
 _IN_MEMORY_SEQUENCES: dict[str, int] = {}
 _IN_MEMORY_RECORDS: dict[str, dict[str, Any]] = {}
@@ -25,7 +25,7 @@ _IN_MEMORY_BATCHES: dict[str, dict[str, Any]] = {}
 
 
 class ReplayAttackError(RuntimeError):
-    """Raised when an operation attempts to reuse an existing sequence number for a model."""
+    """Raised when an operation attempts to persist a duplicate sequence number for a model."""
 
 
 def get_db_connection():
@@ -47,7 +47,7 @@ def get_db_connection():
 
 
 def init_db() -> bool:
-    """Ensure inference plane tables exist. Returns True if live Postgres initialized."""
+    """Verify and initialize inference plane database schema. Returns True if live Postgres ready."""
     try:
         with get_db_connection() as conn:
             with conn.cursor() as cur:
@@ -62,19 +62,22 @@ def init_db() -> bool:
                     CREATE TABLE IF NOT EXISTS inference_records (
                         record_id TEXT PRIMARY KEY,
                         model_id TEXT NOT NULL,
+                        monotonic_sequence_no BIGINT NOT NULL,
                         sequence_number BIGINT NOT NULL,
                         input_hash TEXT NOT NULL,
                         config_hash TEXT NOT NULL,
                         output_hash TEXT NOT NULL,
                         record_hash TEXT NOT NULL,
+                        nonce TEXT NOT NULL,
+                        timestamp TEXT NOT NULL,
                         config_json JSONB NOT NULL,
                         output_json JSONB NOT NULL,
                         batch_id TEXT,
                         created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
-                        CONSTRAINT uq_model_sequence UNIQUE (model_id, sequence_number)
+                        CONSTRAINT uq_model_sequence UNIQUE (model_id, monotonic_sequence_no)
                     );
 
-                    CREATE INDEX IF NOT EXISTS idx_records_model_seq ON inference_records (model_id, sequence_number);
+                    CREATE INDEX IF NOT EXISTS idx_records_model_seq ON inference_records (model_id, monotonic_sequence_no);
                     CREATE INDEX IF NOT EXISTS idx_records_batch_id ON inference_records (batch_id);
                     CREATE INDEX IF NOT EXISTS idx_records_record_hash ON inference_records (record_hash);
 
@@ -95,7 +98,7 @@ def init_db() -> bool:
                     """
                 )
             conn.commit()
-        logger.info("Successfully verified/initialized PostgreSQL tables for Inference Plane.")
+        logger.info("Successfully initialized PostgreSQL tables for Inference Plane.")
         return True
     except Exception as exc:
         logger.warning(
@@ -144,18 +147,21 @@ def get_next_sequence_number(model_id: str) -> int:
 def save_inference_record(
     record_id: str,
     model_id: str,
-    sequence_number: int,
+    monotonic_sequence_no: int,
     input_hash: str,
     config_hash: str,
     output_hash: str,
     record_hash: str,
+    nonce: str,
+    timestamp: str,
     config_json: dict[str, Any] | str,
     output_json: dict[str, Any],
     batch_id: str | None = None,
 ) -> None:
     """Persist an immutable inference record bound to its atomic sequence number.
 
-    Rejects insertion if (model_id, sequence_number) violates the uniqueness constraint (replay defense).
+    Rejects insertion at write time if (model_id, monotonic_sequence_no) violates the
+    uniqueness constraint (the core database replay defense).
     """
     config_str = json.dumps(config_json) if isinstance(config_json, dict) else str(config_json)
     output_str = json.dumps(output_json)
@@ -167,20 +173,23 @@ def save_inference_record(
                     cur.execute(
                         """
                         INSERT INTO inference_records (
-                            record_id, model_id, sequence_number, input_hash,
-                            config_hash, output_hash, record_hash, config_json,
-                            output_json, batch_id
+                            record_id, model_id, monotonic_sequence_no, sequence_number,
+                            input_hash, config_hash, output_hash, record_hash,
+                            nonce, timestamp, config_json, output_json, batch_id
                         )
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s);
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s);
                         """,
                         (
                             record_id,
                             model_id,
-                            sequence_number,
+                            monotonic_sequence_no,
+                            monotonic_sequence_no,
                             input_hash,
                             config_hash,
                             output_hash,
                             record_hash,
+                            nonce,
+                            str(timestamp),
                             config_str,
                             output_str,
                             batch_id,
@@ -191,8 +200,8 @@ def save_inference_record(
                 except psycopg.errors.UniqueViolation as u_exc:
                     conn.rollback()
                     raise ReplayAttackError(
-                        f"REPLAY ATTACK REJECTED: Sequence number {sequence_number} for model {model_id} "
-                        f"has already been persisted."
+                        f"REPLAY ATTACK REJECTED: Sequence number {monotonic_sequence_no} for model {model_id} "
+                        f"already exists in database."
                     ) from u_exc
     except ReplayAttackError:
         raise
@@ -202,24 +211,55 @@ def save_inference_record(
     with _IN_MEMORY_LOCK:
         # Check uniqueness constraint in in-memory store
         for r in _IN_MEMORY_RECORDS.values():
-            if r["model_id"] == model_id and r["sequence_number"] == sequence_number:
+            if r["model_id"] == model_id and r["monotonic_sequence_no"] == monotonic_sequence_no:
                 raise ReplayAttackError(
-                    f"REPLAY ATTACK REJECTED: Sequence number {sequence_number} for model {model_id} "
+                    f"REPLAY ATTACK REJECTED: Sequence number {monotonic_sequence_no} for model {model_id} "
                     f"has already been persisted in memory."
                 )
 
         _IN_MEMORY_RECORDS[record_id] = {
             "record_id": record_id,
             "model_id": model_id,
-            "sequence_number": sequence_number,
+            "monotonic_sequence_no": monotonic_sequence_no,
+            "sequence_number": monotonic_sequence_no,
             "input_hash": input_hash,
             "config_hash": config_hash,
             "output_hash": output_hash,
             "record_hash": record_hash,
+            "nonce": nonce,
+            "timestamp": str(timestamp),
             "config_json": config_json,
             "output_json": output_json,
             "batch_id": batch_id,
         }
+
+
+def tamper_record_output(record_id: str, tampered_output: dict[str, Any]) -> None:
+    """Direct database update modifying record output post-hoc, bypassing API controls.
+
+    Used strictly for security testing to prove that post-hoc tampering of the output field
+    invalidates Merkle verification and cryptographic binding.
+    """
+    output_str = json.dumps(tampered_output)
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE inference_records
+                    SET output_json = %s::jsonb
+                    WHERE record_id = %s;
+                    """,
+                    (output_str, record_id),
+                )
+                conn.commit()
+                return
+    except Exception as exc:
+        logger.debug("Database error during tamper_record_output (%s); tampering in-memory.", exc)
+
+    with _IN_MEMORY_LOCK:
+        if record_id in _IN_MEMORY_RECORDS:
+            _IN_MEMORY_RECORDS[record_id]["output_json"] = tampered_output
 
 
 def get_inference_record(record_id: str) -> dict[str, Any] | None:
@@ -229,9 +269,9 @@ def get_inference_record(record_id: str) -> dict[str, Any] | None:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT record_id, model_id, sequence_number, input_hash,
-                           config_hash, output_hash, record_hash, config_json,
-                           output_json, batch_id, created_at
+                    SELECT record_id, model_id, monotonic_sequence_no, sequence_number,
+                           input_hash, config_hash, output_hash, record_hash,
+                           nonce, timestamp, config_json, output_json, batch_id, created_at
                     FROM inference_records
                     WHERE record_id = %s;
                     """,

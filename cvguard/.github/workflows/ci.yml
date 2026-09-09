@@ -30,6 +30,9 @@ jobs:
       - name: Verify Shared Schemas Import Cleanliness
         run: make schema-check
 
+      - name: Verify Dependency Lockfiles and Hashes
+        run: make lockfile-check
+
       - name: Run Code Style and Type Checks
         run: make lint
 

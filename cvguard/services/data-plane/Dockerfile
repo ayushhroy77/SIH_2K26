@@ -12,11 +12,13 @@ WORKDIR /build
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
+# Install locked dependencies with cryptographic hash verification
+COPY services/data-plane/requirements.txt /build/services/data-plane/
+RUN pip install --no-cache-dir --require-hashes -r /build/services/data-plane/requirements.txt
+
+# Copy and install internal shared schemas package
 COPY libs/schemas /build/libs/schemas
 RUN pip install --no-deps /build/libs/schemas
-
-COPY services/data-plane/pyproject.toml /build/services/data-plane/
-RUN pip install "fastapi>=0.110.0,<1.0.0" "uvicorn[standard]>=0.28.0,<1.0.0" "pydantic>=2.7.0,<3.0.0" "minio>=7.2.0" "pillow>=10.2.0" "imagehash>=4.3.1" "psycopg[binary]>=3.1.18" "httpx>=0.27.0" "python-multipart>=0.0.9" "numpy>=1.26.0" "scipy>=1.12.0" "onnxruntime>=1.17.0"
 
 # --- Runtime Stage ---
 FROM python:3.12.9-slim-bookworm AS runner

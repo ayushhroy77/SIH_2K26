@@ -1,4 +1,4 @@
-"""Batch management, Merkle tree aggregation, and governance sealing for Inference Plane."""
+"""Batch management, Merkle tree aggregation, and governance sealing for CVGuard Inference Plane."""
 
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ class BatchManager:
         self.max_batch_size = max_batch_size
         self._lock = asyncio.Lock()
         self._pending_records: list[dict[str, Any]] = []
-        # In-memory index of record_id -> (batch_id, leaf_index, proof) for rapid verification lookup
+        # In-memory index of record_id -> (batch_id, leaf_index, proof) for fast verification lookup
         self._record_proofs: dict[str, dict[str, Any]] = {}
 
     @property
@@ -43,7 +43,7 @@ class BatchManager:
         """Add an inference record to the pending buffer.
 
         If buffer reaches `max_batch_size`, automatically triggers batch flush.
-        Returns batch_id if flushed, None if still buffered.
+        Returns batch_id if flushed immediately, None if still buffered.
         """
         should_flush = False
         async with self._lock:
@@ -74,12 +74,12 @@ class BatchManager:
         merkle_tree = MerkleTree(leaf_hashes)
         merkle_root = merkle_tree.root
 
-        first_seq = items[0]["sequence_number"]
-        last_seq = items[-1]["sequence_number"]
+        first_seq = items[0].get("monotonic_sequence_no", items[0].get("sequence_number", 1))
+        last_seq = items[-1].get("monotonic_sequence_no", items[-1].get("sequence_number", 1))
         model_id = items[0]["model_id"]
 
         logger.info(
-            "Creating batch %s (%d records, sequences %d..%d, root: %s...)",
+            "Creating Merkle batch %s (%d records, sequences %d..%d, root: %s...)",
             batch_id,
             len(items),
             first_seq,
@@ -135,7 +135,7 @@ class BatchManager:
             signed_dict = signed_finding.model_dump(mode="json")
         except Exception as exc:
             logger.error("Governance dispatch failed for batch %s: %s", batch_id, exc)
-            # Re-queue items if governance failed so they are not dropped
+            # Re-queue items if governance failed so they are not lost
             async with self._lock:
                 self._pending_records = items + self._pending_records
             raise
@@ -188,7 +188,7 @@ class BatchManager:
             return None, []
 
         batch = get_inference_batch(rec["batch_id"])
-        # If batch is found but proof was not in memory, reconstruct proof if size is 1 or minimal
+        # If batch size is 1, proof is empty list (root == leaf)
         if batch and batch.get("size") == 1:
             return batch, []
 
